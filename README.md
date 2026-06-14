@@ -1,13 +1,13 @@
 # gpu_func_cli
 
-Standalone CLI for running CUDA **course exercises** and **custom CUDA kernels**
-on a remote GPU through the GFAAS REST API. The local machine needs no CUDA,
-`nvcc`, Nsight Compute, or GPU. The CLI sends a self-contained job to a GFAAS
-worker.
+Standalone CLI for running **custom CUDA kernels** on a remote GPU through the
+GFAAS REST API. The local machine needs no CUDA, `nvcc`, Nsight Compute, or GPU.
+The CLI sends a self-contained job to a GFAAS worker, and the worker does the
+CUDA work.
 
 Full documentation: [`GUIDE.md`](GUIDE.md). It covers install, configuration,
-the walkthrough, course exercises, custom kernels, reports, command reference,
-and troubleshooting.
+the walkthrough, custom kernels (with and without a harness), reports and
+feedback, command reference, and troubleshooting.
 
 ## Quick start
 
@@ -17,25 +17,16 @@ export GFAAS_API_BASE="https://<hub-host>/api"
 export GFAAS_API_KEY="<your-api-key>"
 gpu_func_cli workers
 
-export CUDA_COURSE_REPO="set to your cuda-course repo"
+# run any self-contained .cu (has its own main()) — nothing else to bring:
+gpu_func_cli custom run /path/to/your_kernel.cu --gpu B200
 
-# quick check: saxpy is self-contained, nothing to implement
-gpu_func_cli custom run "$CUDA_COURSE_REPO/examples/part1/saxpy.cu" --gpu B200
+# kernel-only source? add a --harness that supplies main():
+gpu_func_cli custom run kernel.cu --harness harness.cu --gpu B200
 
-# a graded exercise, using the solution the checkout ships:
-gpu_func_cli exercise 01-haxpy grade \
-  --file "$CUDA_COURSE_REPO/exercises/01-haxpy/solutions/correct/basic.cu" --gpu B200
-
-# any other exercise (same pattern):
-gpu_func_cli exercise 02-softmax128 grade \
-  --file "$CUDA_COURSE_REPO/exercises/02-softmax128/solutions/correct/02-baseline.cu" --gpu B200
+# profile on the GPU, then read the report locally:
+gpu_func_cli custom profile your_kernel.cu --gpu B200 --artifact-dir ./out
+gpu_func_cli report summary ./out/your_kernel.ncu-rep --per-kernel
 ```
-
-> Note: exercises need a cuda-course checkout (nothing is vendored). The commands
-> above use the checkout's bundled `solutions/correct/*.cu` so they run without
-> writing a kernel; swap `--file` for *your* solution to grade your own work. The
-> course starter `exercises/01-haxpy/haxpy.cu` is a `// TODO` stub that fails
-> `grade`.
 
 For a first run, start with the
 [hands-on walkthrough](GUIDE.md#4-hands-on-walkthrough) in `GUIDE.md`. It
