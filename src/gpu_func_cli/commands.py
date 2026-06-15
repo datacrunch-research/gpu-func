@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import urllib.parse
 from pathlib import Path
@@ -21,6 +22,31 @@ from .payloads import (
     _resolve_course_root,
     _resolve_gpu,
 )
+
+# Matches ANSI/VT100 escape sequences (colors, cursor moves) so we can strip
+# them out of captured output before it lands in a JSON file.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _clean_output_for_json(obj: Any) -> Any:
+    """Recursively make captured ``stdout``/``stderr`` readable in saved JSON.
+
+    The worker captures the course/custom runner's terminal output verbatim,
+    which means it carries ANSI colour codes and is one long string full of
+    ``\\n`` escapes once dumped. Walk the result structure and, for any
+    ``stdout``/``stderr`` string, strip the escapes and split it into a list of
+    lines so ``json.dumps(indent=2)`` renders one line per entry.
+    """
+    if isinstance(obj, dict):
+        return {
+            k: (_ANSI_RE.sub("", v).splitlines()
+                if k in ("stdout", "stderr") and isinstance(v, str)
+                else _clean_output_for_json(v))
+            for k, v in obj.items()
+        }
+    if isinstance(obj, list):
+        return [_clean_output_for_json(v) for v in obj]
+    return obj
 
 
 def _cmd_workers(client: "RestClient") -> int:
@@ -67,7 +93,7 @@ def _cmd_custom(args: argparse.Namespace) -> int:
             },
             "result": result,
         }
-        Path(args.json_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
+        Path(args.json_path).write_text(json.dumps(_clean_output_for_json(out), indent=2), encoding="utf-8")
         print(f"Results written to {args.json_path}")
     return exit_code
 
@@ -256,7 +282,7 @@ def _run_flat_exercise(args: argparse.Namespace, client, exercise_dir: Path, gpu
             "course_runner": result.get("course_runner"),
             "report_json": result.get("report_json"),
         }
-        Path(args.json_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
+        Path(args.json_path).write_text(json.dumps(_clean_output_for_json(out), indent=2), encoding="utf-8")
         print(f"Results written to {args.json_path}")
     return code
 
@@ -297,6 +323,6 @@ def _run_checkout_exercise(args: argparse.Namespace, client, course_root: Path, 
             "course_runner": result.get("course_runner"),
             "report_json": result.get("report_json"),
         }
-        Path(args.json_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
+        Path(args.json_path).write_text(json.dumps(_clean_output_for_json(out), indent=2), encoding="utf-8")
         print(f"Results written to {args.json_path}")
     return code
