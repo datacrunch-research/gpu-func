@@ -1,13 +1,103 @@
-"""Argparse construction for the public gpu_func_cli command surface."""
+"""Argparse construction for the public gpu-func command surface."""
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
-# top-level `gpu_func_cli <mode>` that auto-detects the exercise from the cwd.
+# top-level `gpu-func <mode>` that auto-detects the exercise from the cwd.
 EXERCISE_MODES = ["compile", "test", "benchmark", "sanitizer", "profile", "grade"]
+
+
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def _nonnegative_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must not be negative")
+    return parsed
+
+
+def _positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("value must be greater than zero")
+    return parsed
+
+
+def _nonnegative_float(value: str) -> float:
+    parsed = float(value)
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("value must not be negative")
+    return parsed
+
+
+def _byte_size(value: str) -> int:
+    match = re.fullmatch(r"([0-9]+)([KMGTP]i?B|B)?", value, re.IGNORECASE)
+    if match is None:
+        raise argparse.ArgumentTypeError("use bytes or a size such as 512MiB or 4GiB")
+    amount = int(match.group(1))
+    suffix = (match.group(2) or "B").upper()
+    powers = {
+        "B": 0,
+        "KB": 1,
+        "KIB": 1,
+        "MB": 2,
+        "MIB": 2,
+        "GB": 3,
+        "GIB": 3,
+        "TB": 4,
+        "TIB": 4,
+        "PB": 5,
+        "PIB": 5,
+    }
+    return amount * 1024 ** powers[suffix]
+
+
+def _environment(value: str) -> tuple[str, str]:
+    name, separator, setting = value.partition("=")
+    if not separator or not name:
+        raise argparse.ArgumentTypeError("environment variables must use NAME=VALUE")
+    return name, setting
+
+
+def _add_remote_opts(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--gpu",
+        help="legacy GPU label such as B200 or GB300; prefer --gpu-type and --arch",
+    )
+    parser.add_argument(
+        "--gpu-type",
+        default=os.environ.get("GFAAS_GPU_TYPE"),
+        help="gfaas GPU pool; the only configured pool is selected automatically",
+    )
+    parser.add_argument("--gpu-count", type=_positive_int, default=1)
+    parser.add_argument("--image", default=os.environ.get("GFAAS_IMAGE", "cuda-nvcc"))
+    parser.add_argument("--arch")
+    parser.add_argument("--timeout", type=_positive_int, default=600)
+    parser.add_argument("--capacity-wait", type=_nonnegative_int)
+    parser.add_argument("--wait-timeout", type=_nonnegative_float)
+    parser.add_argument("--cpu-millicores", type=_positive_int)
+    parser.add_argument("--memory", type=_byte_size)
+    parser.add_argument("--storage", type=_byte_size)
+    parser.add_argument("--shared-memory", type=_byte_size)
+    parser.add_argument("--max-log", type=_byte_size)
+    parser.add_argument("--max-output", type=_byte_size)
+    parser.add_argument("--env", action="append", type=_environment, default=[])
+    parser.add_argument("--idempotency-key")
+    parser.add_argument("--detach", action="store_true")
+    parser.add_argument(
+        "--json-events",
+        action="store_true",
+        help="write durable Call events as JSON Lines while waiting",
+    )
 
 
 def _add_common_exercise_opts(p: argparse.ArgumentParser) -> None:
@@ -29,45 +119,28 @@ def _add_common_exercise_opts(p: argparse.ArgumentParser) -> None:
         help="path to a flat exercise dir (run.py + runner/ side by side, e.g. an "
         "unzipped exercise). Runs it directly, bypassing the cuda-course layout.",
     )
-    p.add_argument("--gpu", default="B200")
-    p.add_argument("--gpu-type")
-    p.add_argument("--image", default="cuda-nvcc")
-    p.add_argument("--arch")
-    p.add_argument(
-        "--timeout",
-        type=int,
-        default=600,
-        help="wall-clock budget (seconds) for the WHOLE remote run -- compile plus "
-        "every test/benchmark/profile run together. Separate from the per-spec "
-        "`timeout=` inside each benchmark/test file, which bounds a single binary "
-        "run. Default: 600.",
-    )
-    p.add_argument("--wait-timeout", type=float)
+    _add_remote_opts(p)
     p.add_argument("--json", dest="json_path")
     p.add_argument("--artifact-dir")
-    p.add_argument("--ncu-args", default="--set basic")
     p.add_argument("--verbose", action="store_true")
-    p.add_argument("--report-max-mismatches", type=int, default=20)
-    p.add_argument("--keep-going", action="store_true")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gpu_func_cli")
+    parser = argparse.ArgumentParser(prog="gpu-func")
     parser.add_argument("--api-base", default=os.environ.get("GFAAS_API_BASE"))
-    parser.add_argument("--api-key", default=os.environ.get("GFAAS_API_KEY"))
-    parser.add_argument("--request-timeout", type=float, default=60.0)
-    parser.add_argument("--poll-interval", type=float, default=1.0)
+    parser.add_argument("--request-timeout", type=_positive_float)
+    parser.add_argument("--poll-interval", type=_nonnegative_float)
 
     sub = parser.add_subparsers(dest="command_name")
 
-    sub.add_parser("workers", help="List live GFAAS workers")
+    sub.add_parser("workers", aliases=["pools"], help="List configured gfaas GPU pools")
 
     exercise = sub.add_parser("exercise", help="Run a course exercise action")
     exercise.add_argument("exercise_id")
     exercise.add_argument("exercise_command", choices=EXERCISE_MODES)
     _add_common_exercise_opts(exercise)
 
-    # Top-level shortcuts: `gpu_func_cli benchmark [specs...]` auto-detects the
+    # Top-level shortcuts: `gpu-func benchmark [specs...]` auto-detects the
     # exercise from the cwd (an unzipped exercise: run.py + runner/ siblings), so
     # the `exercise <id>` prefix and `--exercise-dir` become optional. Passing
     # --exercise-dir still works from anywhere. With no specs, the runner runs
@@ -75,8 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     for mode in EXERCISE_MODES:
         mp = sub.add_parser(
             mode,
-            help=f"Run the {mode} action on the exercise in the cwd "
-            "(or --exercise-dir)",
+            help=f"Run the {mode} action on the exercise in the cwd (or --exercise-dir)",
         )
         mp.add_argument(
             "--exercise-id",
@@ -92,12 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
     custom.add_argument("--output", default="custom_kernel")
     custom.add_argument("--arg", action="append", default=[], help="Program argument, repeatable")
     custom.add_argument("--nvcc-flags", default="-std=c++20 -O3 -lineinfo")
-    custom.add_argument("--gpu", default="B200")
-    custom.add_argument("--gpu-type")
-    custom.add_argument("--image", default="cuda-nvcc")
-    custom.add_argument("--arch")
-    custom.add_argument("--timeout", type=int, default=600)
-    custom.add_argument("--wait-timeout", type=float)
+    _add_remote_opts(custom)
     custom.add_argument("--json", dest="json_path")
     custom.add_argument("--artifact-dir")
     custom.add_argument("--ncu-args", default="--set basic")
@@ -127,11 +194,15 @@ def build_parser() -> argparse.ArgumentParser:
     feedback.add_argument(
         "--course-dir",
         default=os.environ.get("CUDA_COURSE_DIR"),
-        help="CUDA course checkout containing runner/ and exercises/ "
-        "(or set CUDA_COURSE_DIR)",
+        help="CUDA course checkout containing runner/ and exercises/ (or set CUDA_COURSE_DIR)",
     )
     feedback.add_argument("--exercise", default="01-haxpy")
     feedback.add_argument("--benchmark", default="benchmarks/01_aligned_small.txt")
     feedback.add_argument("--json", dest="json_path")
     feedback.add_argument("--verbose", action="store_true")
+    feedback.add_argument(
+        "--trust-course-code",
+        action="store_true",
+        help="allow report feedback to import and execute the course exercise run.py locally",
+    )
     return parser

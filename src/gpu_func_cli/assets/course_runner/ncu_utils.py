@@ -1,30 +1,38 @@
-import os
-import sys
 import glob
-import subprocess
+import os
 import re
+import sys
+
 
 class NCUError(Exception):
     """Base class for NCU-related errors."""
+
     pass
+
 
 class NCUReportNotFoundError(NCUError):
     """Raised when the NCU report file is not found."""
+
     pass
+
 
 class NCUMetricNotFoundError(NCUError):
     """Raised when a requested metric is not found in the report."""
+
     pass
+
 
 class NCULibraryNotFoundError(NCUError):
     """Raised when ncu_report library is not available."""
+
     pass
+
 
 def find_ncu_python_path():
     """Try to find the path to ncu_report.py in common NVIDIA installation locations."""
     search_paths = [
-        '/opt/nvidia/nsight-compute/*/extras/python/',
-        '/usr/local/cuda/nsight-compute-*/extras/python/',
+        "/opt/nvidia/nsight-compute/*/extras/python/",
+        "/usr/local/cuda/nsight-compute-*/extras/python/",
     ]
 
     found_paths = []
@@ -37,6 +45,7 @@ def find_ncu_python_path():
     # Sort to get the latest version
     found_paths.sort(reverse=True)
     return found_paths[0]
+
 
 # Add NCU Python path to sys.path (if found at a well-known install location).
 # This is best-effort: if it isn't found, ncu_report may still be importable via
@@ -52,7 +61,6 @@ except ImportError:
     ncu_report = None
 
 
-
 def simplify_gpu_name(full_name):
     """Simplify a full GPU name, e.g., 'NVIDIA GeForce RTX 3080' -> 'rtx3080'."""
     if not full_name:
@@ -61,15 +69,22 @@ def simplify_gpu_name(full_name):
     full_name = full_name.lower()
 
     # Mapping for common GPUs
-    if "h100" in full_name: return "h100"
-    if "a100" in full_name: return "a100"
-    if "v100" in full_name: return "v100"
-    if "t4" in full_name: return "t4"
-    if "b200" in full_name: return "b200"
-    if "b300" in full_name: return "b300"
+    if "h100" in full_name:
+        return "h100"
+    if "a100" in full_name:
+        return "a100"
+    if "v100" in full_name:
+        return "v100"
+    if "t4" in full_name:
+        return "t4"
+    if "b200" in full_name:
+        return "b200"
+    if "b300" in full_name:
+        return "b300"
 
     # RTX Pro blackwell
-    if "rtx pro blackwell" in full_name: return "rtxproblackwell"
+    if "rtx pro blackwell" in full_name:
+        return "rtxproblackwell"
     pro_match = re.search(r"rtx\s*pro\s*(\d+)\s*blackwell", full_name)
     if pro_match:
         return f"b{pro_match.group(1)}"
@@ -80,8 +95,16 @@ def simplify_gpu_name(full_name):
         return f"rtx{rtx_match.group(1)}"
 
     # Fallback: remove spaces and non-alphanumeric
-    simplified = re.sub(r'[^a-z0-9]', '', full_name.replace("nvidia", "").replace("geforce", "").replace("tesla", "").replace("quadro", ""))
+    simplified = re.sub(
+        r"[^a-z0-9]",
+        "",
+        full_name.replace("nvidia", "")
+        .replace("geforce", "")
+        .replace("tesla", "")
+        .replace("quadro", ""),
+    )
     return simplified if simplified else "gpu"
+
 
 def get_gpu_name_from_report(report_path):
     return get_ncu_metric(report_path, "", "device__attribute_display_name")
@@ -97,8 +120,8 @@ def get_ncu_metric(report_path, kernel_name_pattern, metric_name):
     # Support for instance-specific metrics like metric_name[instance_name]
     instance_name = None
     base_metric_name = metric_name
-    if '[' in metric_name and metric_name.endswith(']'):
-        base_metric_name, instance_name = metric_name[:-1].split('[', 1)
+    if "[" in metric_name and metric_name.endswith("]"):
+        base_metric_name, instance_name = metric_name[:-1].split("[", 1)
 
     try:
         report = load_report(report_path)
@@ -111,7 +134,9 @@ def get_ncu_metric(report_path, kernel_name_pattern, metric_name):
                     if metric:
                         if instance_name:
                             if not metric.has_correlation_ids():
-                                raise NCUMetricNotFoundError(f"Metric {base_metric_name} does not have instances")
+                                raise NCUMetricNotFoundError(
+                                    f"Metric {base_metric_name} does not have instances"
+                                )
 
                             cids = metric.correlation_ids()
                             found_idx = -1
@@ -121,50 +146,45 @@ def get_ncu_metric(report_path, kernel_name_pattern, metric_name):
                                     break
 
                             if found_idx == -1:
-                                raise NCUMetricNotFoundError(f"Instance {instance_name} not found in metric {base_metric_name}")
+                                raise NCUMetricNotFoundError(
+                                    f"Instance {instance_name} not found in metric {base_metric_name}"
+                                )
 
                             return _format_metric_value(metric, found_idx)
                         else:
                             return _format_metric_value(metric)
 
-        raise NCUMetricNotFoundError(f"Metric {metric_name} not found for kernel {kernel_name_pattern}")
+        raise NCUMetricNotFoundError(
+            f"Metric {metric_name} not found for kernel {kernel_name_pattern}"
+        )
     except NCUError:
         raise
     except Exception as e:
         raise NCUError(str(e)) from e
 
+
 def _format_metric_value(metric, index=None):
     """Helper to format metric value from IMetric object."""
     # Try different accessors depending on what's available and returns a value
     try:
-        if index is not None:
-            val = metric.as_string(index)
-        else:
-            val = metric.as_string()
+        val = metric.as_string(index) if index is not None else metric.as_string()
         if val == "None" or val is None:
             raise ValueError("None string")
-    except:
+    except (AttributeError, RuntimeError, TypeError, ValueError):
         # Some metrics might be double or uint64
         try:
             # Check if it's an integer value represented as double
-            if index is not None:
-                dval = metric.as_double(index)
-            else:
-                dval = metric.as_double()
+            dval = metric.as_double(index) if index is not None else metric.as_double()
 
-            if dval.is_integer():
-                val = str(int(dval))
-            else:
-                val = f"{dval:.2f}"
-        except:
+            val = str(int(dval)) if dval.is_integer() else f"{dval:.2f}"
+        except (AttributeError, RuntimeError, TypeError, ValueError):
             try:
-                if index is not None:
-                    val = str(metric.as_uint64(index))
-                else:
-                    val = str(metric.as_uint64())
-            except:
+                uint_value = metric.as_uint64(index) if index is not None else metric.as_uint64()
+                val = str(uint_value)
+            except (AttributeError, RuntimeError, TypeError, ValueError):
                 val = "N/A"
     return val
+
 
 def get_ncu_opcodes(report_path, kernel_name_pattern, metric_name="sass__inst_executed_per_opcode"):
     """
@@ -180,7 +200,9 @@ def get_ncu_opcodes(report_path, kernel_name_pattern, metric_name="sass__inst_ex
                     metric = action.metric_by_name(metric_name)
                     if metric:
                         if not metric.has_correlation_ids():
-                            raise NCUMetricNotFoundError(f"Metric {metric_name} does not have instances")
+                            raise NCUMetricNotFoundError(
+                                f"Metric {metric_name} does not have instances"
+                            )
 
                         cids = metric.correlation_ids()
                         results = {}
@@ -193,11 +215,14 @@ def get_ncu_opcodes(report_path, kernel_name_pattern, metric_name="sass__inst_ex
                                 results[opcode] = val_str
                         return results
 
-        raise NCUMetricNotFoundError(f"Metric {metric_name} not found for kernel {kernel_name_pattern}")
+        raise NCUMetricNotFoundError(
+            f"Metric {metric_name} not found for kernel {kernel_name_pattern}"
+        )
     except NCUError:
         raise
     except Exception as e:
         raise NCUError(str(e)) from e
+
 
 def get_ncu_stall_reasons(report_path, kernel_name_pattern):
     """
@@ -213,8 +238,10 @@ def get_ncu_stall_reasons(report_path, kernel_name_pattern):
                 if kernel_name_pattern in action.name():
                     results = {}
                     for metric_name in action.metric_names():
-                        if metric_name.startswith(prefix) and not metric_name.endswith("_not_issued"):
-                            reason = metric_name[len(prefix):].replace("_", " ").title()
+                        if metric_name.startswith(prefix) and not metric_name.endswith(
+                            "_not_issued"
+                        ):
+                            reason = metric_name[len(prefix) :].replace("_", " ").title()
                             val = action.metric_by_name(metric_name).as_double()
                             if val > 0:
                                 results[reason] = val
@@ -244,6 +271,8 @@ if __name__ == "__main__":
     else:
         print("Usage: ncu_utils.py <report_path> <kernel_name_pattern> <metric_name>")
         # Example test
-        report = 'examples/reports/saxpy.ncu-rep'
+        report = "examples/reports/saxpy.ncu-rep"
         if os.path.exists(report):
-            print(f"Test saxpy inst_executed: {get_ncu_metric(report, 'saxpy', 'sm__inst_executed.sum')}")
+            print(
+                f"Test saxpy inst_executed: {get_ncu_metric(report, 'saxpy', 'sm__inst_executed.sum')}"
+            )

@@ -63,11 +63,21 @@ def _cmd_report_summary(args: argparse.Namespace) -> int:
         print("\nPer-kernel metrics")
         for kernel_name, kernel_metrics in metrics.items():
             print(f"- {kernel_name}")
-            _print_summary_metric("  Duration", kernel_metrics.get("duration"), formatter=_format_duration_ns)
-            _print_summary_metric("  Instructions", kernel_metrics.get("instructions"), formatter=_format_count)
-            _print_summary_metric("  DRAM read", kernel_metrics.get("dram_read_bytes"), formatter=_format_bytes)
-            _print_summary_metric("  DRAM write", kernel_metrics.get("dram_write_bytes"), formatter=_format_bytes)
-            _print_summary_metric("  DRAM throughput", kernel_metrics.get("dram_throughput"), suffix="%")
+            _print_summary_metric(
+                "  Duration", kernel_metrics.get("duration"), formatter=_format_duration_ns
+            )
+            _print_summary_metric(
+                "  Instructions", kernel_metrics.get("instructions"), formatter=_format_count
+            )
+            _print_summary_metric(
+                "  DRAM read", kernel_metrics.get("dram_read_bytes"), formatter=_format_bytes
+            )
+            _print_summary_metric(
+                "  DRAM write", kernel_metrics.get("dram_write_bytes"), formatter=_format_bytes
+            )
+            _print_summary_metric(
+                "  DRAM throughput", kernel_metrics.get("dram_throughput"), suffix="%"
+            )
 
     if args.json_path:
         out = {
@@ -77,13 +87,17 @@ def _cmd_report_summary(args: argparse.Namespace) -> int:
             "aggregate": _json_safe_dict(aggregate),
             "kernels": _json_safe_dict(metrics),
         }
-        Path(args.json_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
-        print(f"Results written to {args.json_path}")
+        _write_json(Path(args.json_path), out)
     return RC_OK
 
 
 def _cmd_report_feedback(args: argparse.Namespace) -> int:
     report_path = _validate_ncu_report_path(args.report)
+    if not args.trust_course_code:
+        raise CliError(
+            "report feedback imports and executes the course exercise run.py locally; "
+            "inspect the course and pass --trust-course-code to continue"
+        )
     if not args.course_dir:
         raise CliError("report feedback needs --course-dir (or set CUDA_COURSE_DIR)")
     course_dir = Path(args.course_dir).expanduser().resolve()
@@ -130,7 +144,7 @@ def _cmd_report_feedback(args: argparse.Namespace) -> int:
             raise CliError(f"failed to load exercise module: {exercise_run_py}")
         exercise_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(exercise_mod)
-        exercise = getattr(exercise_mod, "exercise")
+        exercise = exercise_mod.exercise
 
         config = testing_mod.parse_test_file(benchmark_path)
         metrics, device = profile_mod.extract_curated_metrics(str(report_path))
@@ -168,8 +182,7 @@ def _cmd_report_feedback(args: argparse.Namespace) -> int:
                 for item in feedback
             ],
         }
-        Path(args.json_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
-        print(f"Results written to {args.json_path}")
+        _write_json(Path(args.json_path), out)
     return RC_OK
 
 
@@ -180,6 +193,17 @@ def _validate_ncu_report_path(path: str) -> Path:
     if report_path.suffix != ".ncu-rep":
         raise CliError(f"expected a .ncu-rep report file, got: {report_path}")
     return report_path
+
+
+def _write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("x", encoding="utf-8") as output:
+            json.dump(value, output, indent=2)
+            output.write("\n")
+    except FileExistsError as exc:
+        raise CliError(f"refusing to replace existing result file: {path}") from exc
+    print(f"Results written to {path}")
 
 
 def _print_summary_metric(

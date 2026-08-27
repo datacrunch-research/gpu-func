@@ -1,52 +1,105 @@
-# gpu_func_cli
+# gpu-func
 
-Standalone CLI for running **course exercises** and **custom CUDA kernels** on a
-remote GPU through the GFAAS REST API. The local machine needs no CUDA, `nvcc`,
-Nsight Compute, or GPU. The CLI sends a self-contained job to a GFAAS worker,
-and the worker does the CUDA work.
+`gpu-func` operates CUDA exercises and custom kernels on a remote GPU through
+gfaas. The local computer does not need CUDA or an NVIDIA GPU.
 
-Full documentation: [`GUIDE.md`](GUIDE.md). It covers install, configuration,
-running a `starter.zip` exercise, custom kernels (with and without a harness),
-reports and feedback, command reference, and troubleshooting.
+The CLI provides these workflows:
 
-## Quick start
+- Compile, test, benchmark, profile, sanitize, or grade a CUDA course exercise.
+- Compile, operate, or profile a custom CUDA program.
+- Submit durable gfaas Calls that support cancellation and retained events.
+- Publish Nsight Compute reports as gfaas Artifacts.
+- Read an existing `.ncu-rep` file on a computer with Nsight Compute.
 
-```bash
-uv tool install --editable /path/to/gpu_func_cli   # or: pip install .
-export GFAAS_API_BASE="https://<hub-host>/api"
-export GFAAS_API_KEY="<your-api-key>"
-gpu_func_cli workers
-```
+Read [GUIDE.md](GUIDE.md) for the complete command reference.
 
-### Run a course exercise (starter.zip)
+## Install
 
-Unzip the `starter.zip`, edit the starter `.cu`, then run an action from inside
-the folder — the exercise is auto-detected from the cwd:
+Install this repository with the current gfaas SDK checkout:
 
 ```bash
-unzip 01-haxpy.zip -d 01-haxpy && cd 01-haxpy
-# edit haxpy.cu (your solution), then:
-gpu_func_cli test          # correctness tests
-gpu_func_cli benchmark     # timing + GiB/s + % of peak
-gpu_func_cli grade         # full suite: test + sanitizer + benchmark
-# from elsewhere, point at the unzipped dir: --exercise-dir /path/to/01-haxpy
+uv tool install --editable /path/to/gpu-func --with-editable /path/to/gfaas
+gpu-func --help
 ```
 
-### Run a custom kernel
+The legacy `gpu_func_cli` command remains available during the rename.
+
+## Configure credentials
+
+Set the gfaas API address and API key in the environment:
 
 ```bash
-# any self-contained .cu (has its own main()) — nothing else to bring:
-gpu_func_cli custom run /path/to/your_kernel.cu --gpu B200
-
-# kernel-only source? add a --harness that supplies main():
-gpu_func_cli custom run kernel.cu --harness harness.cu --gpu B200
-
-# profile on the GPU, then read the report locally:
-gpu_func_cli custom profile your_kernel.cu --gpu B200 --artifact-dir ./out
-gpu_func_cli report summary ./out/your_kernel.ncu-rep --per-kernel
+export GFAAS_API_BASE="https://gpu.example.com/api"
+export GFAAS_API_KEY="..."
+gpu-func pools
 ```
 
-New to the tool? Section 3 of `GUIDE.md` walks the
-[starter.zip flow](GUIDE.md#3-run-a-starterzip-exercise) end to end, and the
-[custom walkthrough](GUIDE.md#5-hands-on-walkthrough-custom) creates its own
-test files so you don't need to bring a CUDA program.
+The CLI does not accept an API key argument. This rule keeps the key out of the
+shell history and the process list.
+
+## Operate a custom CUDA program
+
+Use `--gpu-type` if the coordinator has more than one GPU pool. The CLI selects
+the pool automatically if the coordinator has exactly one pool.
+
+```bash
+gpu-func custom run kernel.cu
+gpu-func custom run kernel.cu --harness harness.cu --gpu-type gb300
+gpu-func custom profile kernel.cu --artifact-dir ./profiles
+```
+
+The worker detects its CUDA architecture by default. Use `--arch` only when the
+source needs an explicit compilation target.
+
+## Operate a course exercise
+
+Run a command from a directory that contains `run.py` and `runner/cli.py`:
+
+```bash
+gpu-func compile
+gpu-func test
+gpu-func benchmark
+gpu-func sanitizer
+gpu-func profile --artifact-dir ./profiles
+gpu-func grade
+```
+
+Use `--exercise-dir` to select an exercise from a different directory.
+
+## Durable Calls
+
+Use `--detach` to return after submission:
+
+```bash
+gpu-func custom run kernel.cu --detach
+gfaas call watch call_...
+gfaas call logs call_... --follow
+gfaas call artifacts call_...
+```
+
+If you interrupt a foreground command, `gpu-func` requests Call cancellation.
+The Call identity remains available in the coordinator.
+
+## Remote data model
+
+`gpu-func` sends the selected source files as an immutable tree Artifact. The
+worker copies that tree to its scratch directory before compilation.
+
+The CLI rejects symbolic links, hard links, unsafe paths, oversized workspaces,
+and existing local output files. Binary exercise fixtures remain unchanged.
+
+Nsight Compute reports do not travel in result JSON. The worker publishes them
+through the declared `profiles` output Artifact.
+
+## Develop
+
+Keep the gfaas checkout next to this repository. Then create the locked
+development environment and run all checks:
+
+```bash
+uv sync --extra dev --locked
+uv run ruff format --check src tests
+uv run ruff check src tests
+uv run mypy src
+uv run pytest -q
+```

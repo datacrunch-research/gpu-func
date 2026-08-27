@@ -1,20 +1,14 @@
-"""Shared constants for CLI defaults, exit codes, and remote payload policy."""
+"""Shared constants for CLI defaults and process exit codes."""
 
 from __future__ import annotations
 
-USER_AGENT = "gpu_func_cli/0.1 curl-compatible"
-TERMINAL_STATES = {"completed", "failed", "timed_out", "cancelled"}
-
-# Remote payload policy: every job bundle is a single module named WORKER_MODULE
-# whose WORKER_QUALNAME function is the entry point, uploaded as OCTET_STREAM.
-WORKER_MODULE = "gpu_func_job"
-WORKER_QUALNAME = "run"
-OCTET_STREAM = "application/octet-stream"
-DEFAULT_COMPILE_FLAGS = ["-std=c++20", "-Xptxas", "--warn-on-spills", "-lineinfo"]
-MI = 1024 * 1024
+# ``--gpu`` remains as a compatibility shortcut. New scripts should use
+# ``--gpu-type`` and ``--arch`` explicitly or let the worker detect its CUDA
+# architecture. The pool names match the current gfaas capability vocabulary.
 GPU_DEFAULTS = {
     "B200": ("b200", "sm_100a"),
-    "B300": ("b300", "sm_100a"),
+    "GB300": ("gb300", "sm_103"),
+    "B300": ("gb300", "sm_103"),
     "H200": ("h200", "sm_90a"),
     "H100": ("h100", "sm_90a"),
     "A100": ("a100", "sm_80"),
@@ -28,4 +22,16 @@ RC_WRONG = 3
 RC_TIMEOUT = 4
 RC_SETUP = 5
 
-_CHECKOUT_SKIP_DIRS = {"__pycache__", ".git", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+_CHECKOUT_SKIP_DIRS = {
+    "__pycache__",
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    "build",
+    "dist",
+}
+
+MAX_WORKSPACE_FILES = 10_000
+MAX_WORKSPACE_BYTES = 1024**3

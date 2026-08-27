@@ -1,5 +1,5 @@
-from .cli import cli
-from .exercise import Exercise
-from .testing import TestConfig
-from .results import RunResult, Report, TestReport, BenchmarkReport, ProfileFeedback
-from  .profile import aggregate_profiling_info
+"""Packaged Nsight Compute report parser.
+
+Remote course workflows ship the runner from the selected exercise. This
+package contains only the local, course-independent report reader.
+"""

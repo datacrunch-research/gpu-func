@@ -1,149 +1,156 @@
+import argparse
+import contextlib
 import io
+import tempfile
 import unittest
-import urllib.error
-import urllib.request
-from unittest import mock
+from pathlib import Path
 
-from gpu_func_cli.client import RestClient
+from gpu_func_cli.client import GfaasClient
 from gpu_func_cli.errors import CliError
 
 
-class FakeResponse:
-    def __init__(self, body):
-        self.body = body
+class FakeRemote:
+    call_id = "call_test"
 
-    def __enter__(self):
-        return self
+    def __init__(self) -> None:
+        self.cancelled = False
 
-    def __exit__(self, exc_type, exc, tb):
-        return False
+    def wait(self, *, timeout_s=None):
+        return {"status": "passed", "timeout": timeout_s}
 
-    def read(self):
-        return self.body
+    def cancel(self, *, reason=None):
+        self.cancelled = True
+        return {"state": "cancelling", "reason": reason}
+
+
+class FakeSdkClient:
+    def __init__(self) -> None:
+        self.remote = FakeRemote()
+        self.submission = None
+        self.event_pages = [
+            {"items": [{"cursor": "1", "type": "state", "state": "queued"}]},
+            {"items": [{"cursor": "2", "type": "state", "state": "succeeded"}]},
+        ]
+
+    def close(self):
+        pass
+
+    def get_capabilities(self):
+        return {
+            "gpu_pools": [
+                {
+                    "name": "gb300",
+                    "status": "available",
+                    "connected_workers": 2,
+                    "available_workers": 1,
+                }
+            ]
+        }
+
+    def upload_artifact_directory(self, path, **kwargs):
+        self.uploaded_path = Path(path)
+        return {"id": "art_workspace", "child_artifact_ids": ["art_child"]}
+
+    def submit(self, **kwargs):
+        self.submission = kwargs
+        return self.remote
+
+    def list_events(self, call_id, *, after, limit):
+        self.last_after = after
+        return self.event_pages.pop(0)
+
+    def get_call(self, call_id):
+        return {"id": call_id, "state": "queued"}
+
+    def list_call_artifacts(self, call_id):
+        return {
+            "items": [
+                {
+                    "name": "profiles",
+                    "artifact": {"id": "art_profiles", "layout": "tree"},
+                }
+            ]
+        }
+
+    def download_artifact_directory(self, artifact_id, destination):
+        destination = Path(destination)
+        destination.mkdir()
+        (destination / "kernel.ncu-rep").write_bytes(b"profile")
+        return destination
+
+
+def args(**overrides):
+    values = {
+        "image": "cuda-nvcc",
+        "gpu_count": 1,
+        "gpu_type": "gb300",
+        "timeout": 600,
+        "capacity_wait": 30,
+        "cpu_millicores": None,
+        "memory": None,
+        "storage": None,
+        "shared_memory": None,
+        "max_log": None,
+        "max_output": None,
+        "env": [],
+        "idempotency_key": "request-1",
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 class ClientTests(unittest.TestCase):
-    def test_rest_client_posts_json_with_headers(self):
-        seen = {}
+    def test_resolve_gpu_type_uses_only_configured_pool(self):
+        client = GfaasClient(FakeSdkClient(), poll_interval=0)
+        self.assertEqual(client.resolve_gpu_type(None), "gb300")
+        self.assertEqual(client.resolve_gpu_type("b200"), "b200")
 
-        def fake_urlopen(req, timeout):
-            seen["req"] = req
-            seen["timeout"] = timeout
-            return FakeResponse(b'{"ok": true}')
+    def test_resolve_gpu_type_requires_selection_when_multiple_pools_exist(self):
+        sdk = FakeSdkClient()
+        sdk.get_capabilities = lambda: {"gpu_pools": [{"name": "gb300"}, {"name": "h200"}]}
+        client = GfaasClient(sdk, poll_interval=0)
+        with self.assertRaisesRegex(CliError, "more than one GPU pool"):
+            client.resolve_gpu_type(None)
 
-        client = RestClient(api_base="https://example.test/api/", api_key="secret", request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            self.assertEqual(client.post_json("/v1/submit", {"a": 1}), {"ok": True})
-
-        self.assertEqual(seen["timeout"], 3)
-        self.assertEqual(seen["req"].full_url, "https://example.test/api/v1/submit")
-        self.assertEqual(seen["req"].get_method(), "POST")
-        self.assertEqual(seen["req"].get_header("X-api-key"), "secret")
-        self.assertEqual(seen["req"].get_header("Content-type"), "application/json")
-        self.assertEqual(seen["req"].data, b'{"a": 1}')
-
-    def test_rest_client_wraps_http_errors(self):
-        def fake_urlopen(req, timeout):
-            raise urllib.error.HTTPError(
-                req.full_url,
-                500,
-                "server error",
-                hdrs={},
-                fp=io.BytesIO(b"broken"),
+    def test_submit_uses_tree_artifact_durable_call_and_declared_profile_output(self):
+        sdk = FakeSdkClient()
+        client = GfaasClient(sdk, poll_interval=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            remote = client.submit_job(
+                job={"target": {"kind": "custom"}},
+                workspace=Path(temporary),
+                args=args(),
+                app_name="gpu-func-custom",
             )
 
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            with self.assertRaisesRegex(CliError, "HTTP 500"):
-                client.get_json("/v1/workers")
+        self.assertIs(remote, sdk.remote)
+        self.assertEqual(sdk.submission["gpu_type"], "gb300")
+        self.assertEqual(sdk.submission["gpu_count"], 1)
+        self.assertEqual(sdk.submission["idempotency_key"], "request-1")
+        self.assertEqual(sdk.submission["kwargs"]["workspace"].artifact_id, "art_workspace")
+        self.assertEqual(sdk.submission["outputs"][0].name, "profiles")
 
-    def test_bundle_upload_retries_connection_reset(self):
-        calls = []
+    def test_wait_resumes_events_by_cursor_and_fetches_result(self):
+        sdk = FakeSdkClient()
+        client = GfaasClient(sdk, poll_interval=0)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            result = client.wait_for_result(sdk.remote, timeout_s=1)
 
-        def fake_urlopen(req, timeout):
-            calls.append(req.full_url)
-            if len(calls) == 1:
-                raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
-            return FakeResponse(b'{"bundle_id": "bundle-1"}')
+        self.assertEqual(result["status"], "passed")
+        self.assertEqual(sdk.last_after, "1")
+        self.assertIn("state=queued", stderr.getvalue())
+        self.assertIn("state=succeeded", stderr.getvalue())
 
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            result = client.post_bytes(
-                "/v1/bundles?sha256=abc",
-                b"payload",
-                content_type="application/octet-stream",
-            )
-
-        self.assertEqual(result, {"bundle_id": "bundle-1"})
-        self.assertEqual(len(calls), 2)
-
-    def test_submit_does_not_retry_connection_reset(self):
-        calls = []
-
-        def fake_urlopen(req, timeout):
-            calls.append(req.full_url)
-            raise urllib.error.URLError(ConnectionResetError(104, "Connection reset by peer"))
-
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            with self.assertRaisesRegex(CliError, "Connection reset"):
-                client.post_json("/v1/submit", {"bundle_id": "bundle-1"})
-
-        self.assertEqual(len(calls), 1)
-
-    def test_get_retries_bare_read_timeout(self):
-        calls = []
-
-        def fake_urlopen(req, timeout):
-            calls.append(req.full_url)
-            if len(calls) == 1:
-                raise TimeoutError("The read operation timed out")
-            return FakeResponse(b'{"status": "completed"}')
-
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            result = client.get_json("/v1/jobs/job-1")
-
-        self.assertEqual(result, {"status": "completed"})
-        self.assertEqual(len(calls), 2)
-
-    def test_get_retries_wrapped_timeout_message(self):
-        calls = []
-
-        def fake_urlopen(req, timeout):
-            calls.append(req.full_url)
-            if len(calls) == 1:
-                raise urllib.error.URLError("timed out")
-            return FakeResponse(b'{"status": "completed"}')
-
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            result = client.get_json("/v1/jobs/job-1")
-
-        self.assertEqual(result, {"status": "completed"})
-        self.assertEqual(len(calls), 2)
-
-    def test_submit_wraps_bare_read_timeout_without_retry(self):
-        calls = []
-
-        def fake_urlopen(req, timeout):
-            calls.append(req.full_url)
-            raise TimeoutError("The read operation timed out")
-
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(urllib.request, "urlopen", fake_urlopen):
-            with self.assertRaisesRegex(CliError, "read operation timed out"):
-                client.post_json("/v1/submit", {"bundle_id": "bundle-1"})
-
-        self.assertEqual(len(calls), 1)
-
-    def test_wait_job_timeout_uses_cli_timeout_exit_code(self):
-        client = RestClient(api_base="https://example.test/api", api_key=None, request_timeout=3, poll_interval=0)
-        with mock.patch.object(client, "get_json", return_value={"status": "queued"}):
-            with self.assertRaisesRegex(CliError, "did not finish") as ctx:
-                client.wait_job("job-1", timeout_s=0.001)
-
-        self.assertEqual(ctx.exception.exit_code, 4)
+    def test_profile_download_refuses_to_replace_existing_file(self):
+        sdk = FakeSdkClient()
+        client = GfaasClient(sdk, poll_interval=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary, "profiles")
+            destination.mkdir()
+            (destination / "kernel.ncu-rep").write_bytes(b"existing")
+            with self.assertRaisesRegex(CliError, "refusing to replace"):
+                client.download_profiles("call_test", destination)
 
 
 if __name__ == "__main__":

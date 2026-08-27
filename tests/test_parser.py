@@ -5,19 +5,54 @@ from gpu_func_cli.parser import build_parser
 
 class ParserTests(unittest.TestCase):
     def test_custom_parser_defaults_and_repeatable_args(self):
-        args = build_parser().parse_args(["custom", "profile", "kernel.cu", "--arg", "7", "--arg", "x"])
+        args = build_parser().parse_args(
+            ["custom", "profile", "kernel.cu", "--arg", "7", "--arg", "x"]
+        )
 
         self.assertEqual(args.command_name, "custom")
         self.assertEqual(args.custom_command, "profile")
         self.assertEqual(args.source, "kernel.cu")
         self.assertEqual(args.arg, ["7", "x"])
-        self.assertEqual(args.gpu, "B200")
+        self.assertIsNone(args.gpu)
+        self.assertEqual(args.gpu_count, 1)
         self.assertEqual(args.ncu_args, "--set basic")
         self.assertEqual(args.nvtx_range, "profile_kernel")
 
+    def test_remote_resource_options_parse_human_sizes(self):
+        args = build_parser().parse_args(
+            [
+                "custom",
+                "run",
+                "kernel.cu",
+                "--gpu-type",
+                "gb300",
+                "--gpu-count",
+                "4",
+                "--memory",
+                "384GiB",
+                "--storage",
+                "256GiB",
+                "--env",
+                "MODE=test",
+            ]
+        )
+
+        self.assertEqual(args.gpu_type, "gb300")
+        self.assertEqual(args.gpu_count, 4)
+        self.assertEqual(args.memory, 384 * 1024**3)
+        self.assertEqual(args.storage, 256 * 1024**3)
+        self.assertEqual(args.env, [("MODE", "test")])
+
     def test_exercise_parser_accepts_specs_and_source_file(self):
         args = build_parser().parse_args(
-            ["exercise", "01-haxpy", "benchmark", "benchmarks/01_aligned_small.txt", "--file", "haxpy.cu"]
+            [
+                "exercise",
+                "01-haxpy",
+                "benchmark",
+                "benchmarks/01_aligned_small.txt",
+                "--file",
+                "haxpy.cu",
+            ]
         )
 
         self.assertEqual(args.command_name, "exercise")
