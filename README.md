@@ -1,9 +1,14 @@
-# gpu-func
+# gfaas SDK and command-line clients
 
-`gpu-func` operates CUDA exercises and custom kernels on a remote GPU through
-gfaas. The local computer does not need CUDA or an NVIDIA GPU.
+This repository is the public home of the gfaas Python SDK and command-line
+clients. It provides two command surfaces:
 
-The CLI provides these workflows:
+- `gfaas` runs Python and CUDA files, manages durable Calls and Artifacts, and
+  can run CUDA directly on a local NVIDIA GPU.
+- `gpu-func` operates CUDA exercises and custom kernels on a remote GPU through
+  gfaas. The local computer does not need CUDA or an NVIDIA GPU.
+
+The CUDA client provides these workflows:
 
 - Compile, test, benchmark, profile, sanitize, or grade a CUDA course exercise.
 - Compile, operate, or profile a custom CUDA program.
@@ -11,14 +16,17 @@ The CLI provides these workflows:
 - Publish Nsight Compute reports as gfaas Artifacts.
 - Read an existing `.ncu-rep` file on a computer with Nsight Compute.
 
-Read [GUIDE.md](GUIDE.md) for the complete command reference.
+Read the [gfaas SDK guide](docs/introduction.md) for installation, concepts,
+examples, and the `gfaas` command reference.
+Read [GUIDE.md](GUIDE.md) for the `gpu-func` command reference.
 
 ## Install
 
-Install this repository with the current gfaas SDK checkout:
+Install the SDK and both commands from the public Git repository:
 
 ```bash
-uv tool install --editable /path/to/gpu-func --with-editable /path/to/gfaas
+uv tool install "git+https://github.com/datacrunch-research/gpu-func.git"
+gfaas --help
 gpu-func --help
 ```
 
@@ -36,6 +44,49 @@ gpu-func pools
 
 The CLI does not accept an API key argument. This rule keeps the key out of the
 shell history and the process list.
+
+## Use the Python SDK
+
+The SDK provides a small function API and a lower-level durable Call client:
+
+```python
+import gfaas
+
+app = gfaas.App("hello")
+
+
+@app.function(image=gfaas.Image.from_registry("pytorch-cu130"), gpu_type="gb300")
+def gpu_name() -> str:
+    import torch
+
+    return torch.cuda.get_device_name(0)
+
+
+print(gpu_name.remote())
+```
+
+The general CLI can submit Python and CUDA source files:
+
+```bash
+gfaas run experiment.py --gpu-type gb300
+gfaas run kernel.cu --gpu-type gb300 -- --problem-size 4096
+```
+
+Use `gfaas local run` to run trusted CUDA source on a local NVIDIA GPU:
+
+```bash
+gfaas local info
+gfaas local run kernel.cu -- --problem-size 4096
+```
+
+Calls remain available after the submitting process disconnects. Use the CLI
+to inspect or cancel them:
+
+```bash
+gfaas call show call_...
+gfaas call logs call_... --follow
+gfaas call cancel call_... --reason "no longer needed"
+```
 
 ## Operate a custom CUDA program
 
@@ -93,8 +144,8 @@ through the declared `profiles` output Artifact.
 
 ## Develop
 
-Keep the gfaas checkout next to this repository. Then create the locked
-development environment and run all checks:
+Create the locked development environment and run all checks from this
+repository:
 
 ```bash
 uv sync --extra dev --locked
@@ -102,4 +153,6 @@ uv run ruff format --check src tests
 uv run ruff check src tests
 uv run mypy src
 uv run pytest -q
+mdbook build docs
+mdbook test docs
 ```

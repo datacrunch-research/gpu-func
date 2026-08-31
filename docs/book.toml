@@ -1,0 +1,8 @@
+[book]
+title = "gfaas Python SDK guide"
+description = "Write and submit GPU workloads with the gfaas Python SDK"
+language = "en"
+src = "."
+
+[build]
+build-dir = "target"

@@ -101,17 +101,16 @@ memory layout, a launch-configuration comparison, or a reduced compiler error.
 
 ### Install
 
-Keep the `gpu-func` and `gfaas` repositories next to each other. Install both
-editable checkouts into one `uv` tool environment:
+Install the SDK and CUDA client from this repository:
 
 ```bash
-uv tool install --editable /path/to/gpu-func \
-  --with-editable /path/to/gfaas
+uv tool install /path/to/gpu-func
 ```
 
-Make sure that the command is available:
+Make sure that both commands are available:
 
 ```bash
+gfaas --help
 gpu-func --help
 ```
 

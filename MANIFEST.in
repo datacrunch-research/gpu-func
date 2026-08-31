@@ -1,2 +1,5 @@
+include GUIDE.md
+recursive-include docs *.md
+recursive-include examples *.cu *.md *.py
 recursive-include src/gpu_func_cli/assets *
 global-exclude *.py[cod]

@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest import mock
 
 from gfaas import ArtifactOutput, ArtifactRef
-
 from gpu_func_cli.worker_job import _detect_cuda_arch, _run_process, run
 
 
