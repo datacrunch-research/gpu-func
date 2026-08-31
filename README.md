@@ -72,6 +72,9 @@ gfaas run experiment.py --gpu-type gb300
 gfaas run kernel.cu --gpu-type gb300 -- --problem-size 4096
 ```
 
+The [Nemotron LoRA guide](docs/fine-tuning-nemotron.md) covers bounded
+fine-tuning Calls, checkpoints, resume, and adapter download.
+
 Use `gfaas local run` to run trusted CUDA source on a local NVIDIA GPU:
 
 ```bash

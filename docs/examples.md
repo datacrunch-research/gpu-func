@@ -37,6 +37,23 @@ The selected image must contain each package that the script imports.
 Read the [CLI example guide](../examples/cli/README.md) for output files,
 profiling, local execution, and Call management.
 
+## Nemotron LoRA examples
+
+The repository contains two supervised fine-tuning examples:
+
+| Example | Model family |
+| --- | --- |
+| `examples/nemotron_lora.py` | Nemotron 3 Nano and the 9B pilot model |
+| `examples/nemotron_lightning_lora.py` | Nemotron 3.5 Lightning 30B-A3B |
+
+Install the optional tokenizer dependencies before you run these examples:
+
+```bash
+uv sync --extra training-example
+```
+
+Read [Fine-tune Nemotron with LoRA](fine-tuning-nemotron.md) before you submit a training Call.
+
 ## API reference
 
 The SDK exports its public Python API from the `gfaas` package. Start with

@@ -27,6 +27,7 @@ Repository = "https://github.com/datacrunch-research/gpu-func"
 
 [project.optional-dependencies]
 dev = ["mypy>=1.10", "pytest>=8", "ruff>=0.16,<0.17"]
+training-example = ["jinja2==3.1.6", "transformers==5.8.1"]
 
 [project.scripts]
 gfaas = "gfaas.cli:entrypoint"
