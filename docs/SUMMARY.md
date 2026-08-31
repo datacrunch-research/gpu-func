@@ -15,5 +15,6 @@
 - [Calls](calls/index.md)
   - [Submit, wait, and cancel](calls/lifecycle.md)
   - [Events and live logs](calls/events.md)
+- [Fine-tune Nemotron with LoRA](fine-tuning-nemotron.md)
 - [Examples and API reference](examples.md)
 - [Errors and limits](errors-limits.md)
