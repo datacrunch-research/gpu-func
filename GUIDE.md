@@ -48,7 +48,7 @@ the gfaas data flow come later.
 10. [Understand the remote data flow](#10-understand-the-remote-data-flow)
 11. [Command reference](#11-command-reference)
 12. [Workspace and trust rules](#12-workspace-and-trust-rules)
-13. [Exit codes](#13-exit-codes)
+13. [Exit status](#13-exit-status)
 14. [Troubleshooting](#14-troubleshooting)
 
 ## 1. Choose a workflow
@@ -867,7 +867,9 @@ course Python code into the local process. It requires `--trust-course-code`.
 The CLI does not replace existing JSON files or downloaded profile reports.
 This rule prevents one experiment from silently overwriting another.
 
-## 13. Exit codes
+## 13. Exit status
+
+The course and custom workflow commands use these exit codes:
 
 | Code | Meaning |
 | --- | --- |
@@ -881,6 +883,12 @@ This rule prevents one experiment from silently overwriting another.
 
 A course runner controls its detailed exit result. A custom harness must return
 a nonzero exit code for an incorrect numerical result.
+
+The `run` and `local run` commands return the program status when the program stops with an error.
+They limit a positive program status to `125`. They return `1` for a negative status or a CLI error.
+
+The Call, Artifact, pool, and completion commands return `0` after success. They return `1` after
+a client or service error.
 
 ## 14. Troubleshooting
 
@@ -943,4 +951,4 @@ files.
 ### A local wait ended but the Call still runs
 
 `--wait-timeout` limits only the local wait. Inspect the Call with
-`gfaas call show`, then watch or cancel it with the general gfaas CLI.
+`gfaas call show`. Then watch or cancel it with the same command.

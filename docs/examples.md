@@ -34,8 +34,8 @@ The selected image must contain each package that the script imports.
 
 ## More CLI examples
 
-Read the [CLI example guide](../examples/cli/README.md) for output files,
-profiling, local execution, and Call management.
+Read the [command-line interface](cli.md) chapter for local execution, output files, and Call
+management. Read [CUDA development workflows](cuda-workflows.md) for profiling and course exercises.
 
 ## Nemotron LoRA examples
 
