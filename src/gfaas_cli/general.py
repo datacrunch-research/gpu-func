@@ -333,7 +333,7 @@ def _show_result(call_id: str, result: Any, *, runtime: str, json_output: bool) 
         if runtime == "cuda":
             compile_ms = result.get("compile_ms")
             run_ms = result.get("run_ms")
-            print(f"[gfaas] compile_ms={compile_ms} run_ms={run_ms}", file=sys.stderr)
+            print(f"[vfunc] compile_ms={compile_ms} run_ms={run_ms}", file=sys.stderr)
     elif result is not None:
         if isinstance(result, (dict, list, str, int, float, bool)):
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -462,14 +462,14 @@ def _local_command(args: argparse.Namespace, program_args: list[str]) -> int:
     )
     if not args.json:
         print(
-            f"[gfaas] local device={toolchain.selected_gpu.name} "
+            f"[vfunc] local device={toolchain.selected_gpu.name} "
             f"arch={architecture} nvcc={toolchain.nvcc_version}",
             file=sys.stderr,
         )
         for output in result["outputs"]:
             if output["exists"]:
                 print(
-                    f"[gfaas] local output name={output['name']} path={output['path']}",
+                    f"[vfunc] local output name={output['name']} path={output['path']}",
                     file=sys.stderr,
                 )
     return _show_result("local", result, runtime=runtime, json_output=args.json)
@@ -482,7 +482,7 @@ def _run_command(client: Client, args: argparse.Namespace, program_args: list[st
     elif args.detach:
         print(remote.call_id)
     else:
-        print(f"[gfaas] call={remote.call_id}", file=sys.stderr)
+        print(f"[vfunc] call={remote.call_id}", file=sys.stderr)
     if args.detach:
         return 0
 
@@ -499,7 +499,7 @@ def _run_command(client: Client, args: argparse.Namespace, program_args: list[st
             )
         else:
             print(
-                f"\n[gfaas] cancellation requested call={remote.call_id} state={state}",
+                f"\n[vfunc] cancellation requested call={remote.call_id} state={state}",
                 file=sys.stderr,
             )
         return 130
@@ -535,7 +535,7 @@ def _call_command(client: Client, args: argparse.Namespace) -> int:
             print(logs.get("stdout", ""), end="", file=sys.stdout)
             print(logs.get("stderr", ""), end="", file=sys.stderr)
             if logs.get("truncated"):
-                print("[gfaas] retained logs are truncated", file=sys.stderr)
+                print("[vfunc] retained logs are truncated", file=sys.stderr)
         return 0
     if args.call_command == "cancel":
         value = client.cancel_call(args.call_id, reason=args.reason)
@@ -591,7 +591,7 @@ def _pool_command(client: Client, args: argparse.Namespace) -> int:
 
 
 def _completion_command(args: argparse.Namespace) -> int:
-    print(argcomplete.shellcode(["gfaas"], shell=args.shell), end="")
+    print(argcomplete.shellcode(["vfunc"], shell=args.shell), end="")
     return 0
 
 

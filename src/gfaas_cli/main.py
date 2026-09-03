@@ -1,4 +1,4 @@
-"""Public entry point for the unified gfaas command."""
+"""Public entry point for the unified vfunc command."""
 
 # PYTHON_ARGCOMPLETE_OK
 
@@ -33,13 +33,13 @@ def main(
     try:
         return _main(argv, client_factory=client_factory)
     except CliError as exc:
-        print(f"gfaas: error: {exc}", file=sys.stderr)
+        print(f"vfunc: error: {exc}", file=sys.stderr)
         return exc.exit_code
     except (GfaasError, httpx.HTTPError, OSError, UnicodeError, ValueError) as exc:
-        print(f"gfaas: error: {exc}", file=sys.stderr)
+        print(f"vfunc: error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
-        print("\ngfaas: interrupted", file=sys.stderr)
+        print("\nvfunc: interrupted", file=sys.stderr)
         return 130
 
 

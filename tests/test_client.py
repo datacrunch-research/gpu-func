@@ -120,7 +120,7 @@ class ClientTests(unittest.TestCase):
                 job={"target": {"kind": "custom"}},
                 workspace=Path(temporary),
                 args=args(),
-                app_name="gfaas-custom",
+                app_name="vfunc-custom",
             )
 
         self.assertIs(remote, sdk.remote)

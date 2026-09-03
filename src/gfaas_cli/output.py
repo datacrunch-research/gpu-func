@@ -13,7 +13,7 @@ from .constants import RC_COMPILE, RC_CRASH, RC_OK, RC_SETUP, RC_TIMEOUT
 
 def _print_setup_error(result: dict[str, Any]) -> None:
     message = result.get("error") or "remote worker setup failed"
-    print(f"gfaas: {message}", file=sys.stderr)
+    print(f"vfunc: {message}", file=sys.stderr)
     traceback = result.get("traceback")
     if traceback:
         print(traceback, file=sys.stderr, end="" if traceback.endswith("\n") else "\n")
@@ -38,7 +38,7 @@ def _print_course_runner_result(
         print(stderr, file=sys.stderr, end="" if stderr.endswith("\n") else "\n")
 
     for path in downloaded_profiles or []:
-        print(f"gfaas: profile report -> {path}", file=sys.stderr)
+        print(f"vfunc: profile report -> {path}", file=sys.stderr)
 
     if runner.get("timed_out"):
         return RC_TIMEOUT
@@ -95,7 +95,7 @@ def _print_custom_result(
             return RC_CRASH
 
     for path in downloaded_profiles or []:
-        print(f"gfaas: profile report -> {path}", file=sys.stderr)
+        print(f"vfunc: profile report -> {path}", file=sys.stderr)
 
     if result.get("status") == "passed":
         print(f"Custom {args.custom_command} passed")

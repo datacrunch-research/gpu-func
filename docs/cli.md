@@ -1,6 +1,6 @@
 # Command-line interface
 
-The `gfaas` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA
+The `vfunc` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA
 workflows. It also manages durable Calls and Artifacts. See [CUDA development
 workflows](cuda-workflows.md) for exercise, benchmark, sanitizer, profiler, and grading commands.
 
@@ -14,15 +14,15 @@ The command groups have these purposes:
 
 | Command | Purpose |
 | --- | --- |
-| `gfaas run` | Submit one Python or CUDA source file. |
-| `gfaas local` | Inspect or use a CUDA GPU on the local host. |
-| `gfaas call` | Inspect, watch, or cancel a durable Call. |
-| `gfaas artifact` | Download an Artifact. |
-| `gfaas pool` | List the configured GPU pools. |
-| `gfaas completion` | Generate shell-completion setup. |
-| `gfaas custom` | Compile, run, or profile a custom CUDA program. |
-| `gfaas exercise` | Run an action for a CUDA course exercise. |
-| `gfaas report` | Inspect a local Nsight Compute report. |
+| `vfunc run` | Submit one Python or CUDA source file. |
+| `vfunc local` | Inspect or use a CUDA GPU on the local host. |
+| `vfunc call` | Inspect, watch, or cancel a durable Call. |
+| `vfunc artifact` | Download an Artifact. |
+| `vfunc pool` | List the configured GPU pools. |
+| `vfunc completion` | Generate shell-completion setup. |
+| `vfunc custom` | Compile, run, or profile a custom CUDA program. |
+| `vfunc exercise` | Run an action for a CUDA course exercise. |
+| `vfunc report` | Inspect a local Nsight Compute report. |
 
 The top-level `compile`, `test`, `benchmark`, `sanitizer`, `profile`, and `grade` commands
 auto-detect a course exercise from the current directory.
@@ -35,7 +35,7 @@ commands, nested subcommands, options, option values, and Python or CUDA source 
 Enable completion in the current Bash session:
 
 ```bash
-eval "$(gfaas completion bash)"
+eval "$(vfunc completion bash)"
 ```
 
 Add the same line to `~/.bashrc` to enable it in new Bash sessions.
@@ -44,16 +44,16 @@ Install completion for Fish:
 
 ```fish
 mkdir -p ~/.config/fish/completions
-gfaas completion fish > ~/.config/fish/completions/gfaas.fish
+vfunc completion fish > ~/.config/fish/completions/vfunc.fish
 ```
 
-Fish loads that file in new sessions. Run `gfaas completion fish | source` to enable it in the
+Fish loads that file in new sessions. Run `vfunc completion fish | source` to enable it in the
 current session.
 
 Enable completion in the current Zsh session:
 
 ```zsh
-eval "$(gfaas completion zsh)"
+eval "$(vfunc completion zsh)"
 ```
 
 Add the same line to `~/.zshrc` to enable it in new Zsh sessions.
@@ -61,7 +61,7 @@ Add the same line to `~/.zshrc` to enable it in new Zsh sessions.
 Enable completion in the current PowerShell session:
 
 ```powershell
-gfaas completion powershell | Out-String | Invoke-Expression
+vfunc completion powershell | Out-String | Invoke-Expression
 ```
 
 Completion generation is local. It does not read credentials or connect to the service.
@@ -77,8 +77,8 @@ the inherited process environment.
 Inspect the local toolchain before execution:
 
 ```bash
-gfaas local info
-gfaas local info --json
+vfunc local info
+vfunc local info --json
 ```
 
 The command reports the GPUs, compute capabilities, CUDA compiler, host compiler, and Nsight Compute
@@ -87,7 +87,7 @@ path. It also reports the effective `CUDA_VISIBLE_DEVICES` value.
 Compile and run a local CUDA program:
 
 ```bash
-gfaas local run examples/cli/hello_cuda.cu \
+vfunc local run examples/cli/hello_cuda.cu \
   --nvcc-flag=-O3 \
   -- --problem-size 4096
 ```
@@ -111,14 +111,14 @@ Tool discovery uses this order:
 Use `--env NAME=VALUE` to add or replace an environment value. Local mode inherits other values from
 the current process.
 
-Declared local outputs remain ordinary files. Keep generated benchmark files under `.local/gfaas/`
+Declared local outputs remain ordinary files. Keep generated benchmark files under `.local/vfunc/`
 so they do not add files to the repository root:
 
 ```bash
-mkdir -p .local/gfaas
-gfaas local run kernel.cu \
-  --output benchmark=.local/gfaas/results.csv \
-  -- --output .local/gfaas/results.csv
+mkdir -p .local/vfunc
+vfunc local run kernel.cu \
+  --output benchmark=.local/vfunc/results.csv \
+  -- --output .local/vfunc/results.csv
 ```
 
 The program must write the declared path. The CLI refuses to replace a declared path that already
@@ -127,9 +127,9 @@ exists.
 Use JSON results to compare the same source on local and remote GPUs:
 
 ```bash
-mkdir -p .local/gfaas
-gfaas local run kernel.cu --json > .local/gfaas/local.json
-gfaas run kernel.cu --gpu-type gb300 --json > .local/gfaas/remote.jsonl
+mkdir -p .local/vfunc
+vfunc local run kernel.cu --json > .local/vfunc/local.json
+vfunc run kernel.cu --gpu-type gb300 --json > .local/vfunc/remote.jsonl
 ```
 
 The local result records the device, architecture, toolchain, compiler time, execution time, and
@@ -140,7 +140,7 @@ captured output. The remote command produces a JSON Lines event stream with a fi
 Run the standalone CUDA example:
 
 ```bash
-gfaas run examples/cli/hello_cuda.cu \
+vfunc run examples/cli/hello_cuda.cu \
   --gpu-type gb300 \
   --nvcc-flag=-O3
 ```
@@ -151,7 +151,7 @@ flag, the `nvcc` configuration in the selected image controls the compilation ta
 Run the standalone PyTorch example:
 
 ```bash
-gfaas run examples/cli/hello_python.py \
+vfunc run examples/cli/hello_python.py \
   --image pytorch-cu130 \
   --gpu-type gb300 \
   -- --size 2048
@@ -177,7 +177,7 @@ workload values. The coordinator stores workload environment values in the Envir
 The global connection options must occur before the command name:
 
 ```bash
-gfaas \
+vfunc \
   --api-base https://gpu.example.com/api \
   --request-timeout 60 \
   --poll-interval 0.5 \
@@ -191,7 +191,7 @@ Use the environment variables for normal operation. The CLI has no API-key optio
 Create a self-contained `kernel.cu` file. Then submit it:
 
 ```bash
-uv run gfaas run kernel.cu \
+uv run vfunc run kernel.cu \
   --gpu-type gb300 \
   --nvcc-flag=-O3 \
   -- --problem-size 4096
@@ -203,7 +203,7 @@ the compiled program.
 The remote `run` command has no `--arch` option. Use a compiler flag to select an explicit target:
 
 ```bash
-uv run gfaas run kernel.cu \
+uv run vfunc run kernel.cu \
   --gpu-type gb300 \
   --nvcc-flag=-arch=sm_103
 ```
@@ -214,7 +214,7 @@ uses `--set full`.
 To replace the default, repeat `--ncu-arg` for each profiler argument:
 
 ```bash
-uv run gfaas run kernel.cu \
+uv run vfunc run kernel.cu \
   --profile \
   --ncu-arg=--set \
   --ncu-arg=basic
@@ -224,7 +224,7 @@ The compiled program starts in the workload output directory. Declare a file tha
 publish:
 
 ```bash
-uv run gfaas run kernel.cu \
+uv run vfunc run kernel.cu \
   --gpu-type gb300 \
   --output benchmark=results.csv
 ```
@@ -237,7 +237,7 @@ declared output.
 Submit a self-contained Python script:
 
 ```bash
-uv run gfaas run experiment.py \
+uv run vfunc run experiment.py \
   --image pytorch-cu130 \
   --gpu-type gb300 \
   --memory 128GiB \
@@ -254,7 +254,7 @@ The script starts with the output directory as its current directory. Declare fi
 that the Call must publish:
 
 ```bash
-uv run gfaas run experiment.py \
+uv run vfunc run experiment.py \
   --image pytorch-cu130 \
   --output report=reports/result.json \
   --output-directory profiles=profiles
@@ -268,7 +268,7 @@ causes the Call to fail.
 Add the callable name after the source path:
 
 ```bash
-uv run gfaas run experiment.py:train \
+uv run vfunc run experiment.py:train \
   --image pytorch-cu130 \
   -- input.json
 ```
@@ -305,7 +305,7 @@ the literal `any` pool.
 Use `--detach` to return after Call creation:
 
 ```bash
-call_id="$(uv run gfaas run kernel.cu --gpu-type gb300 --detach)"
+call_id="$(uv run vfunc run kernel.cu --gpu-type gb300 --detach)"
 ```
 
 The command writes only the Call ID to standard output. The remote Call continues after the client
@@ -314,12 +314,12 @@ exits.
 Use the Call commands to reconnect:
 
 ```bash
-uv run gfaas call show "$call_id"
-uv run gfaas call watch "$call_id"
-uv run gfaas call logs "$call_id"
-uv run gfaas call logs "$call_id" --follow
-uv run gfaas call artifacts "$call_id"
-uv run gfaas call cancel "$call_id" --reason superseded
+uv run vfunc call show "$call_id"
+uv run vfunc call watch "$call_id"
+uv run vfunc call logs "$call_id"
+uv run vfunc call logs "$call_id" --follow
+uv run vfunc call artifacts "$call_id"
+uv run vfunc call cancel "$call_id" --reason superseded
 ```
 
 The Call subcommands have these purposes:
@@ -336,7 +336,7 @@ The `watch` command follows retained and new events. Use `--after CURSOR` to res
 event. The `logs` command returns retained output and then stops. Add `--follow` to wait for new
 output. All Call subcommands accept `--json`.
 
-If you interrupt a foreground `gfaas run`, the CLI requests remote Call cancellation. Use `--detach`
+If you interrupt a foreground `vfunc run`, the CLI requests remote Call cancellation. Use `--detach`
 before a long Call when the Call must survive a client interruption.
 
 ## Machine-readable output
@@ -348,8 +348,8 @@ Add `--json` to produce complete event records. A foreground `run` command produ
 because it reports the submission, Call events, and final result.
 
 ```bash
-uv run gfaas run kernel.cu --gpu-type gb300 --json
-uv run gfaas pool list --json
+uv run vfunc run kernel.cu --gpu-type gb300 --json
+uv run vfunc pool list --json
 ```
 
 Human-readable progress goes to standard error. This separation lets scripts capture detached Call
@@ -360,7 +360,7 @@ IDs and JSON output from standard output.
 Download one Artifact to a new path:
 
 ```bash
-uv run gfaas artifact download art_abc result.bin
+uv run vfunc artifact download art_abc result.bin
 ```
 
 The command refuses to replace an existing path. Directory Artifacts retain their tree layout and

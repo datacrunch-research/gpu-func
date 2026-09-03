@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gfaas"
 version = "0.1.0"
-description = "Python SDK and command-line clients for the gfaas GPU service"
+description = "Python SDK and vfunc command-line client for the gfaas GPU service"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Aditya Jitta" }]
@@ -31,7 +31,7 @@ dev = ["mypy>=1.10", "pytest>=8", "ruff>=0.16,<0.17"]
 training-example = ["jinja2==3.1.6", "transformers==5.8.1"]
 
 [project.scripts]
-gfaas = "gfaas_cli.main:entrypoint"
+vfunc = "gfaas_cli.main:entrypoint"
 
 [tool.setuptools]
 include-package-data = true

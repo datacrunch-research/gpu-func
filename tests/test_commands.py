@@ -55,7 +55,7 @@ class CommandTests(unittest.TestCase):
             client,
             args(),
             payload,
-            app_name="gfaas-custom",
+            app_name="vfunc-custom",
             label="custom run",
             arch="sm_103",
         )
@@ -76,7 +76,7 @@ class CommandTests(unittest.TestCase):
                 "hashes": {"kernel.cu": "digest"},
                 "files": {"kernel.cu": b"int main() {}\n"},
             },
-            app_name="gfaas-custom",
+            app_name="vfunc-custom",
             label="custom run",
             arch="worker-detected",
         )

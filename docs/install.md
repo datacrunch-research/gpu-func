@@ -10,6 +10,9 @@ Install the SDK and command from the public Git repository:
 uv tool install "git+https://github.com/datacrunch-research/gpu-func.git"
 ```
 
+`vfunc` replaces the previous `gfaas` command. The Python distribution and import namespace remain
+`gfaas`.
+
 For development, clone the repository and install its locked environment:
 
 ```bash
@@ -19,7 +22,7 @@ uv sync --extra dev --locked
 Make sure that the command is available:
 
 ```bash
-gfaas --help
+vfunc --help
 ```
 
 ## Get an API key

@@ -14,7 +14,7 @@ export GFAAS_GPU_TYPE=gb300
 Submit the example:
 
 ```bash
-gfaas run examples/cli/hello_cuda.cu --gpu-type "$GFAAS_GPU_TYPE"
+vfunc run examples/cli/hello_cuda.cu --gpu-type "$GFAAS_GPU_TYPE"
 ```
 
 The command reports the Call ID and its state changes. It also shows the compiler and program
@@ -23,7 +23,7 @@ output. The selected worker can change between Calls.
 Use `--json` when another program consumes the result:
 
 ```bash
-gfaas run examples/cli/hello_cuda.cu \
+vfunc run examples/cli/hello_cuda.cu \
   --gpu-type "$GFAAS_GPU_TYPE" \
   --json
 ```
