@@ -1,4 +1,4 @@
-"""Argparse construction for the public gfaas command surface."""
+"""Argparse construction for the public vfunc command surface."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import re
 from . import general
 
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
-# top-level `gfaas <mode>` that auto-detects the exercise from the cwd.
+# top-level `vfunc <mode>` that auto-detects the exercise from the cwd.
 EXERCISE_MODES = ["compile", "test", "benchmark", "sanitizer", "profile", "grade"]
 
 
@@ -78,7 +78,7 @@ def _add_remote_opts(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--gpu-type",
         default=os.environ.get("GFAAS_GPU_TYPE"),
-        help="gfaas GPU pool; the only configured pool is selected automatically",
+        help="GPU pool; the only configured pool is selected automatically",
     )
     parser.add_argument("--gpu-count", type=_positive_int, default=1)
     parser.add_argument("--image", default=os.environ.get("GFAAS_IMAGE", "cuda-nvcc"))
@@ -129,7 +129,7 @@ def _add_common_exercise_opts(p: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gfaas",
+        prog="vfunc",
         description="Run GPU workloads and manage durable Calls and Artifacts.",
     )
     parser.add_argument("--api-base", default=os.environ.get("GFAAS_API_BASE"))
@@ -147,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     exercise.add_argument("exercise_command", choices=EXERCISE_MODES)
     _add_common_exercise_opts(exercise)
 
-    # Top-level shortcuts: `gfaas benchmark [specs...]` auto-detects the
+    # Top-level shortcuts: `vfunc benchmark [specs...]` auto-detects the
     # exercise from the cwd (an unzipped exercise: run.py + runner/ siblings), so
     # the `exercise <id>` prefix and `--exercise-dir` become optional. Passing
     # --exercise-dir still works from anywhere. With no specs, the runner runs

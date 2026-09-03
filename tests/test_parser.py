@@ -5,10 +5,10 @@ from gfaas_cli.parser import build_parser
 
 
 class ParserTests(unittest.TestCase):
-    def test_parser_uses_gfaas_name_and_includes_both_command_families(self):
+    def test_parser_uses_vfunc_name_and_includes_both_command_families(self):
         parser = build_parser()
 
-        self.assertEqual(parser.prog, "gfaas")
+        self.assertEqual(parser.prog, "vfunc")
         self.assertEqual(parser.parse_args(["call", "show", "call_1"]).call_command, "show")
         self.assertEqual(
             parser.parse_args(["artifact", "download", "art_1"]).artifact_command,

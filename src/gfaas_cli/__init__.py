@@ -1,1 +1,1 @@
-"""Internal implementation of the unified gfaas command."""
+"""Internal implementation of the unified vfunc command."""

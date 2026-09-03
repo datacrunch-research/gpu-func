@@ -1,9 +1,12 @@
-# gfaas SDK and command-line clients
+# gfaas SDK and vfunc CLI
 
-This repository is the public home of the gfaas Python SDK and its `gfaas`
+This repository is the public home of the gfaas Python SDK and its `vfunc`
 command. The command runs Python and CUDA files, manages durable Calls and
 Artifacts, and can run CUDA directly on a local NVIDIA GPU. It also operates
 CUDA exercises and custom kernels on remote GPUs.
+
+`vfunc` replaces the previous `gfaas` command. The Python distribution and import namespace remain
+`gfaas`.
 
 The CUDA client provides these workflows:
 
@@ -14,7 +17,7 @@ The CUDA client provides these workflows:
 - Read an existing `.ncu-rep` file on a computer with Nsight Compute.
 
 Read the [gfaas SDK guide](docs/introduction.md) for installation, concepts,
-examples, and the `gfaas` command reference.
+examples, and the `vfunc` command reference.
 Read [GUIDE.md](GUIDE.md) for the CUDA workflow guide.
 
 ## Install
@@ -23,7 +26,7 @@ Install the SDK and command from the public Git repository:
 
 ```bash
 uv tool install "git+https://github.com/datacrunch-research/gpu-func.git"
-gfaas --help
+vfunc --help
 ```
 
 ## Configure credentials
@@ -33,7 +36,7 @@ Set the gfaas API address and API key in the environment:
 ```bash
 export GFAAS_API_BASE="https://gpu.example.com/api"
 export GFAAS_API_KEY="..."
-gfaas pool list
+vfunc pool list
 ```
 
 The CLI does not accept an API key argument. This rule keeps the key out of the
@@ -62,35 +65,35 @@ print(gpu_name.remote())
 The general CLI can submit Python and CUDA source files:
 
 ```bash
-gfaas run experiment.py --gpu-type gb300
-gfaas run kernel.cu --gpu-type gb300 -- --problem-size 4096
+vfunc run experiment.py --gpu-type gb300
+vfunc run kernel.cu --gpu-type gb300 -- --problem-size 4096
 ```
 
 The [Nemotron LoRA guide](docs/fine-tuning-nemotron.md) covers bounded
 fine-tuning Calls, checkpoints, resume, and adapter download.
 
-Use `gfaas local run` to run trusted CUDA source on a local NVIDIA GPU:
+Use `vfunc local run` to run trusted CUDA source on a local NVIDIA GPU:
 
 ```bash
-gfaas local info
-gfaas local run kernel.cu -- --problem-size 4096
+vfunc local info
+vfunc local run kernel.cu -- --problem-size 4096
 ```
 
 Calls remain available after the submitting process disconnects. Use the CLI
 to inspect or cancel them:
 
 ```bash
-gfaas call show call_...
-gfaas call logs call_... --follow
-gfaas call artifacts call_...
-gfaas artifact download art_... ./result
-gfaas call cancel call_... --reason "no longer needed"
+vfunc call show call_...
+vfunc call logs call_... --follow
+vfunc call artifacts call_...
+vfunc artifact download art_... ./result
+vfunc call cancel call_... --reason "no longer needed"
 ```
 
 Generate completion setup for Bash, Fish, Zsh, or PowerShell:
 
 ```bash
-eval "$(gfaas completion bash)"
+eval "$(vfunc completion bash)"
 ```
 
 ## Operate a custom CUDA program
@@ -99,9 +102,9 @@ Use `--gpu-type` if the coordinator has more than one GPU pool. The CLI selects
 the pool automatically if the coordinator has exactly one pool.
 
 ```bash
-gfaas custom run kernel.cu
-gfaas custom run kernel.cu --harness harness.cu --gpu-type gb300
-gfaas custom profile kernel.cu --artifact-dir ./profiles
+vfunc custom run kernel.cu
+vfunc custom run kernel.cu --harness harness.cu --gpu-type gb300
+vfunc custom profile kernel.cu --artifact-dir ./profiles
 ```
 
 The worker detects its CUDA architecture by default. Use `--arch` only when the
@@ -112,12 +115,12 @@ source needs an explicit compilation target.
 Run a command from a directory that contains `run.py` and `runner/cli.py`:
 
 ```bash
-gfaas compile
-gfaas test
-gfaas benchmark
-gfaas sanitizer
-gfaas profile --artifact-dir ./profiles
-gfaas grade
+vfunc compile
+vfunc test
+vfunc benchmark
+vfunc sanitizer
+vfunc profile --artifact-dir ./profiles
+vfunc grade
 ```
 
 Use `--exercise-dir` to select an exercise from a different directory.
@@ -127,18 +130,18 @@ Use `--exercise-dir` to select an exercise from a different directory.
 Use `--detach` to return after submission:
 
 ```bash
-gfaas custom run kernel.cu --detach
-gfaas call watch call_...
-gfaas call logs call_... --follow
-gfaas call artifacts call_...
+vfunc custom run kernel.cu --detach
+vfunc call watch call_...
+vfunc call logs call_... --follow
+vfunc call artifacts call_...
 ```
 
-If you interrupt a foreground command, `gfaas` requests Call cancellation.
+If you interrupt a foreground command, `vfunc` requests Call cancellation.
 The Call identity remains available in the coordinator.
 
 ## Remote data model
 
-`gfaas` sends the selected source files as an immutable tree Artifact. The
+`vfunc` sends the selected source files as an immutable tree Artifact. The
 worker copies that tree to its scratch directory before compilation.
 
 The CLI rejects symbolic links, hard links, unsafe paths, oversized workspaces,

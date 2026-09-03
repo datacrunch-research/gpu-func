@@ -116,6 +116,6 @@ def show_event(
         return
     summary = _human_event(event)
     if summary is not None:
-        print(f"[gfaas] {summary}", file=sys.stderr)
+        print(f"[vfunc] {summary}", file=sys.stderr)
         return
-    print(f"[gfaas] event={json.dumps(event, sort_keys=True)}", file=sys.stderr)
+    print(f"[vfunc] event={json.dumps(event, sort_keys=True)}", file=sys.stderr)

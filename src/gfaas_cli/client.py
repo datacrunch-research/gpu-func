@@ -1,4 +1,4 @@
-"""Client configuration and adapters for gfaas CLI workflows."""
+"""Client configuration and adapters for vfunc CLI workflows."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class GfaasClient:
                 filename=f"{app_name}-workspace",
             )
             print(
-                f"[gfaas] workspace artifact={uploaded['id']} "
+                f"[vfunc] workspace artifact={uploaded['id']} "
                 f"files={len(uploaded.get('child_artifact_ids', []))}",
                 file=sys.stderr,
             )
@@ -173,14 +173,14 @@ class GfaasClient:
             result = remote.wait(timeout_s=remaining)
         except KeyboardInterrupt:
             try:
-                remote.cancel(reason="gfaas client interrupted")
+                remote.cancel(reason="vfunc client interrupted")
                 print(
-                    f"[gfaas] cancellation requested call={remote.call_id}",
+                    f"[vfunc] cancellation requested call={remote.call_id}",
                     file=sys.stderr,
                 )
             except Exception as cancel_error:
                 print(
-                    f"[gfaas] cancellation failed call={remote.call_id}: {cancel_error}",
+                    f"[vfunc] cancellation failed call={remote.call_id}: {cancel_error}",
                     file=sys.stderr,
                 )
             raise
@@ -207,7 +207,7 @@ class GfaasClient:
             return []
         destination.mkdir(parents=True, exist_ok=True)
         downloaded: list[Path] = []
-        with tempfile.TemporaryDirectory(prefix="gfaas-profiles-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="vfunc-profiles-") as temporary:
             temporary_root = Path(temporary)
             for index, publication in enumerate(publications):
                 artifact = publication.get("artifact")

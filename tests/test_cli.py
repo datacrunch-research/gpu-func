@@ -352,17 +352,17 @@ def test_foreground_human_output_summarizes_lifecycle_events(
     assert cli.main(["run", str(source)], client_factory=_factory(FakeClient(remote))) == 0
 
     captured = capsys.readouterr()
-    assert "[gfaas] state=queued" in captured.err
+    assert "[vfunc] state=queued" in captured.err
     assert (
-        "[gfaas] waiting for capacity reason=gpu_occupancy worker=gb300-01 generation=2"
+        "[vfunc] waiting for capacity reason=gpu_occupancy worker=gb300-01 generation=2"
         in captured.err
     )
     assert (
-        "[gfaas] preparation phase=bundle_uploaded worker=gb300-03 files=0 bytes=0B "
+        "[vfunc] preparation phase=bundle_uploaded worker=gb300-03 files=0 bytes=0B "
         "size=31.9KiB" in captured.err
     )
-    assert "[gfaas] state=succeeded worker=gb300-03 total=1.68s execute=1.26s" in captured.err
-    assert "[gfaas] artifact role=result id=art_result" in captured.err
+    assert "[vfunc] state=succeeded worker=gb300-03 total=1.68s execute=1.26s" in captured.err
+    assert "[vfunc] artifact role=result id=art_result" in captured.err
     assert '"attempt_id"' not in captured.err
 
 
@@ -446,7 +446,7 @@ def test_completion_writes_shell_setup_without_creating_a_client(capsys) -> None
 
     expected_markers = {
         "bash": "_python_argcomplete",
-        "fish": "__fish_gfaas_complete",
+        "fish": "__fish_vfunc_complete",
         "zsh": "_python_argcomplete",
         "powershell": "Register-ArgumentCompleter",
     }
@@ -454,7 +454,7 @@ def test_completion_writes_shell_setup_without_creating_a_client(capsys) -> None
         assert cli.main(["completion", shell], client_factory=unexpected_client) == 0
         output = capsys.readouterr().out
         assert marker in output
-        assert "gfaas" in output
+        assert "vfunc" in output
 
 
 def test_local_info_does_not_create_a_remote_client(monkeypatch, capsys) -> None:
