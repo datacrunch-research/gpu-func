@@ -4,7 +4,7 @@ You need Python 3.11 or newer, `uv`, and an API key.
 
 ## Get the SDK
 
-Install the SDK and both commands from the public Git repository:
+Install the SDK and command from the public Git repository:
 
 ```bash
 uv tool install "git+https://github.com/datacrunch-research/gpu-func.git"

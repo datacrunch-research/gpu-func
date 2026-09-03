@@ -165,7 +165,7 @@ def _build_checkout_payload(
         hashes[rel] = hashlib.sha256(data).hexdigest()
         _check_workspace_limits(files)
 
-    json_out = "_gpu_func_cli.json"
+    json_out = "_gfaas_cli.json"
     command = ["python3", "run.py", "--json", json_out]
     if file_arg:
         command += ["--file", file_arg]
@@ -264,7 +264,7 @@ def _build_flat_exercise_payload(
         hashes[rel] = hashlib.sha256(data).hexdigest()
         _check_workspace_limits(files)
 
-    json_out = "_gpu_func_cli.json"
+    json_out = "_gfaas_cli.json"
     command = ["python3", "run.py", "--json", json_out]
     if file_arg:
         command += ["--file", file_arg]

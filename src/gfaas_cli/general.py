@@ -13,16 +13,17 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any
 
 import argcomplete
-import httpx
 from argcomplete.completers import FilesCompleter
 
-from . import cuda_runner, local_cuda, python_runner
-from .artifacts import ArtifactOutput
-from .client import Client, RemoteResult
-from .errors import GfaasError
+from gfaas import cuda_runner, local_cuda, python_runner
+from gfaas.artifacts import ArtifactOutput
+from gfaas.client import Client, RemoteResult
+
+from .errors import CliError
+from .events import show_event
 
 _SIZE = re.compile(r"^(?P<value>[0-9]+)(?P<unit>B|KiB|MiB|GiB|TiB)?$")
 _SIZE_MULTIPLIERS = {
@@ -33,10 +34,6 @@ _SIZE_MULTIPLIERS = {
     "GiB": 1024**3,
     "TiB": 1024**4,
 }
-
-
-class CliError(Exception):
-    """An actionable local command error."""
 
 
 def _size_bytes(value: str) -> int:
@@ -103,16 +100,11 @@ def _add_local_toolchain_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="gfaas",
-        description="Submit files to gfaas and manage durable Calls.",
-    )
-    commands = parser.add_subparsers(dest="command", required=True)
-
+def add_commands(commands: Any) -> None:
+    """Add the general workload and resource commands to a root parser."""
     run = commands.add_parser("run", help="submit a Python or CUDA source file")
     target = run.add_argument("target", help="a .py file, file.py:callable, or .cu file")
-    target.completer = FilesCompleter(("py", "cu"))  # type: ignore[attr-defined]
+    target.completer = FilesCompleter(("py", "cu"))
     run.add_argument("--runtime", choices=("python", "cuda"))
     run.add_argument("--image", help="registered image name")
     run.add_argument("--gpu-type", help="GPU pool name; defaults to GFAAS_GPU_TYPE or any")
@@ -142,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     local_run = local_commands.add_parser("run", help="compile and run a local CUDA source file")
     local_target = local_run.add_argument("target", help="a self-contained .cu file")
-    local_target.completer = FilesCompleter(("cu",))  # type: ignore[attr-defined]
+    local_target.completer = FilesCompleter(("cu",))
     _add_local_toolchain_options(local_run)
     local_run.add_argument(
         "--arch",
@@ -200,8 +192,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("bash", "fish", "zsh", "powershell"),
         help="shell that will load the generated setup",
     )
-
-    return parser
 
 
 def _split_program_args(argv: Sequence[str]) -> tuple[list[str], list[str]]:
@@ -325,113 +315,6 @@ def _json_value(value: Any) -> Any:
 
 def _write_json(value: Any) -> None:
     print(json.dumps(value, separators=(",", ":"), sort_keys=True))
-
-
-def _format_bytes(value: Any) -> str:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        return str(value)
-    units = ("B", "KiB", "MiB", "GiB", "TiB")
-    amount = float(value)
-    unit = units[0]
-    for candidate in units[1:]:
-        if amount < 1024:
-            break
-        amount /= 1024
-        unit = candidate
-    if unit == "B":
-        return f"{value}B"
-    return f"{amount:.1f}{unit}"
-
-
-def _format_milliseconds(value: Any) -> str:
-    if not isinstance(value, int | float) or isinstance(value, bool):
-        return str(value)
-    if value < 1000:
-        return f"{value:g}ms"
-    return f"{value / 1000:.2f}s"
-
-
-def _event_attributes(event: dict[str, Any]) -> dict[str, Any]:
-    attributes = event.get("attributes")
-    return attributes if isinstance(attributes, dict) else {}
-
-
-def _human_event(event: dict[str, Any]) -> str | None:
-    event_type = event.get("type")
-    attributes = _event_attributes(event)
-
-    if event_type == "state":
-        state = event.get("state") or attributes.get("state") or "unknown"
-        parts = [f"state={state}"]
-        worker_id = attributes.get("worker_id")
-        if worker_id:
-            parts.append(f"worker={worker_id}")
-        resources = attributes.get("resources")
-        if isinstance(resources, dict) and isinstance(resources.get("gpus"), list):
-            parts.append(f"gpus={len(resources['gpus'])}")
-        timing = attributes.get("timing")
-        if isinstance(timing, dict):
-            for name in ("total_ms", "queue_ms", "execute_ms"):
-                if name in timing:
-                    parts.append(f"{name.removesuffix('_ms')}={_format_milliseconds(timing[name])}")
-        return " ".join(parts)
-
-    if event_type == "preparation":
-        parts = [f"preparation phase={attributes.get('phase', 'unknown')}"]
-        if attributes.get("worker_id"):
-            parts.append(f"worker={attributes['worker_id']}")
-        parts.append(f"files={attributes.get('completed_files', 0)}")
-        parts.append(f"bytes={_format_bytes(attributes.get('completed_bytes', 0))}")
-        details = attributes.get("details")
-        if isinstance(details, dict):
-            for name in ("image_name", "image_id", "artifact_id"):
-                if details.get(name):
-                    parts.append(
-                        f"{name.removesuffix('_name').removesuffix('_id')}={details[name]}"
-                    )
-            if "size_bytes" in details:
-                parts.append(f"size={_format_bytes(details['size_bytes'])}")
-        return " ".join(parts)
-
-    if event_type == "diagnostic":
-        diagnostic_type = attributes.get("type", "unknown")
-        if diagnostic_type == "placement_rejection":
-            return (
-                "waiting for capacity"
-                f" reason={attributes.get('reason', 'unknown')}"
-                f" worker={attributes.get('worker_id', 'unknown')}"
-                f" generation={attributes.get('placement_generation', 'unknown')}"
-            )
-        return f"diagnostic type={diagnostic_type}"
-
-    if event_type == "artifact":
-        parts = ["artifact"]
-        for name in ("role", "name", "generation", "artifact_id"):
-            if name in attributes:
-                label = "id" if name == "artifact_id" else name
-                parts.append(f"{label}={attributes[name]}")
-        return " ".join(parts)
-
-    if event_type == "retention.truncated":
-        return "retained event stream is truncated"
-
-    return None
-
-
-def _show_event(event: dict[str, Any], *, json_output: bool) -> None:
-    if json_output:
-        _write_json({"type": "call_event", "event": event})
-        return
-    event_type = event.get("type")
-    if event_type in {"stdout", "stderr"}:
-        stream = sys.stdout if event_type == "stdout" else sys.stderr
-        print(str(event.get("stream_data", "")), end="", file=stream, flush=True)
-        return
-    summary = _human_event(event)
-    if summary is not None:
-        print(f"[gfaas] {summary}", file=sys.stderr)
-        return
-    print(f"[gfaas] event={json.dumps(event, sort_keys=True)}", file=sys.stderr)
 
 
 def _show_result(call_id: str, result: Any, *, runtime: str, json_output: bool) -> int:
@@ -605,7 +488,7 @@ def _run_command(client: Client, args: argparse.Namespace, program_args: list[st
 
     try:
         for event in remote.iter_events(follow=True):
-            _show_event(event, json_output=args.json)
+            show_event(event, json_output=args.json)
         result = remote.wait()
     except KeyboardInterrupt:
         cancellation = remote.cancel(reason="local CLI interrupted")
@@ -630,7 +513,7 @@ def _call_command(client: Client, args: argparse.Namespace) -> int:
         return 0
     if args.call_command == "watch":
         for event in client.iter_events(args.call_id, after=args.after, follow=True):
-            _show_event(event, json_output=args.json)
+            show_event(event, json_output=args.json)
         return 0
     if args.call_command == "logs":
         if args.follow:
@@ -712,52 +595,33 @@ def _completion_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _fail(message: str) -> int:
-    print(f"gfaas: error: {message}", file=sys.stderr)
-    return 1
+GENERAL_COMMANDS = frozenset({"run", "local", "call", "artifact", "pool", "completion"})
 
 
-def main(
-    argv: Sequence[str] | None = None,
-    *,
-    client_factory: Callable[[], Client] = Client,
-) -> int:
-    command_line, program_args = _split_program_args(argv if argv is not None else sys.argv[1:])
-    parser = build_parser()
-    if argv is None:
-        argcomplete.autocomplete(parser)
-    args = parser.parse_args(command_line)
-    accepts_program_args = args.command == "run" or (
-        args.command == "local" and args.local_command == "run"
+def accepts_program_args(args: argparse.Namespace) -> bool:
+    return args.command_name == "run" or (
+        args.command_name == "local" and args.local_command == "run"
     )
-    if program_args and not accepts_program_args:
-        parser.error("program arguments after -- require the run command")
-
-    try:
-        if args.command == "completion":
-            return _completion_command(args)
-        if args.command == "local":
-            return _local_command(args, program_args)
-        with client_factory() as client:
-            if args.command == "run":
-                return _run_command(client, args, program_args)
-            if args.command == "call":
-                return _call_command(client, args)
-            if args.command == "artifact":
-                return _artifact_command(client, args)
-            if args.command == "pool":
-                return _pool_command(client, args)
-            raise AssertionError(f"unknown command {args.command!r}")
-    except KeyboardInterrupt:
-        print("\ngfaas: interrupted", file=sys.stderr)
-        return 130
-    except (CliError, GfaasError, httpx.HTTPError, OSError, UnicodeError, ValueError) as error:
-        return _fail(str(error))
 
 
-def entrypoint() -> NoReturn:
-    raise SystemExit(main())
-
-
-if __name__ == "__main__":
-    entrypoint()
+def dispatch(
+    args: argparse.Namespace,
+    program_args: list[str],
+    *,
+    client_factory: Callable[[], Client],
+) -> int:
+    """Run one parsed general command."""
+    if args.command_name == "completion":
+        return _completion_command(args)
+    if args.command_name == "local":
+        return _local_command(args, program_args)
+    with client_factory() as client:
+        if args.command_name == "run":
+            return _run_command(client, args, program_args)
+        if args.command_name == "call":
+            return _call_command(client, args)
+        if args.command_name == "artifact":
+            return _artifact_command(client, args)
+        if args.command_name == "pool":
+            return _pool_command(client, args)
+    raise AssertionError(f"unknown command {args.command_name!r}")

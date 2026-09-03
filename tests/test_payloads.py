@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.errors import CliError
-from gpu_func_cli.payloads import (
+from gfaas_cli.errors import CliError
+from gfaas_cli.payloads import (
     _build_checkout_payload,
     _build_custom_payload,
     _clean_payload_path,
@@ -151,7 +151,7 @@ class PayloadTests(unittest.TestCase):
                 "python3",
                 "run.py",
                 "--json",
-                "_gpu_func_cli.json",
+                "_gfaas_cli.json",
                 "--file",
                 "__submitted__.cu",
                 "-v",

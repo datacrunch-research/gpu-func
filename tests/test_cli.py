@@ -5,7 +5,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from gfaas import cli, cuda_runner, local_cuda, python_runner
+from gfaas import cuda_runner, local_cuda, python_runner
+from gfaas_cli import main as cli
 
 
 class FakeRemoteResult:
@@ -39,6 +40,7 @@ class FakeClient:
         self.cancellations: list[tuple[str, str | None]] = []
         self.artifact_metadata: dict[str, Any] = {}
         self.file_downloads: list[tuple[str, Path]] = []
+        self.call_artifacts: list[dict[str, Any]] = []
 
     def __enter__(self) -> FakeClient:
         return self
@@ -56,6 +58,12 @@ class FakeClient:
     def cancel_call(self, call_id: str, *, reason: str | None = None) -> dict[str, Any]:
         self.cancellations.append((call_id, reason))
         return {"id": call_id, "state": "cancelling"}
+
+    def get_call_logs(self, call_id: str) -> dict[str, Any]:
+        return {"call_id": call_id, "stdout": "hello\n", "stderr": "", "truncated": False}
+
+    def list_call_artifacts(self, call_id: str) -> dict[str, Any]:
+        return {"call_id": call_id, "items": self.call_artifacts}
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
         return {"id": artifact_id, **self.artifact_metadata}
@@ -373,6 +381,21 @@ def test_call_cancel_passes_the_reason(capsys) -> None:
     assert json.loads(capsys.readouterr().out) == {"id": "call_1", "state": "cancelling"}
 
 
+def test_call_show_logs_and_artifacts_are_available(capsys) -> None:
+    client = FakeClient()
+    client.call_artifacts = [{"name": "result", "artifact": {"id": "art_1"}}]
+
+    assert cli.main(["call", "show", "call_1", "--json"], client_factory=_factory(client)) == 0
+    assert json.loads(capsys.readouterr().out) == {"id": "call_1", "state": "running"}
+
+    assert cli.main(["call", "logs", "call_1"], client_factory=_factory(client)) == 0
+    assert capsys.readouterr().out == "hello\n"
+
+    assert cli.main(["call", "artifacts", "call_1", "--json"], client_factory=_factory(client)) == 0
+    artifacts = json.loads(capsys.readouterr().out)
+    assert artifacts["items"][0]["artifact"]["id"] == "art_1"
+
+
 def test_artifact_download_refuses_to_replace_an_existing_path(
     tmp_path: Path,
     capsys,
@@ -390,6 +413,20 @@ def test_artifact_download_refuses_to_replace_an_existing_path(
     assert "destination already exists" in capsys.readouterr().err
     assert destination.read_bytes() == b"keep"
     assert client.file_downloads == []
+
+
+def test_artifact_download_uses_the_requested_destination(tmp_path: Path, capsys) -> None:
+    destination = tmp_path / "result.bin"
+    client = FakeClient()
+
+    status = cli.main(
+        ["artifact", "download", "art_1", str(destination)],
+        client_factory=_factory(client),
+    )
+
+    assert status == 0
+    assert capsys.readouterr().out.strip() == str(destination)
+    assert client.file_downloads == [("art_1", destination)]
 
 
 def test_pool_list_has_human_and_json_output(capsys) -> None:

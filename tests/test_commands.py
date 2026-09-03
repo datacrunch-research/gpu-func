@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.commands import _submit_payload, _write_result_json
-from gpu_func_cli.errors import CliError
+from gfaas_cli.commands import _submit_payload, _write_result_json
+from gfaas_cli.errors import CliError
 
 
 class FakeRemote:
@@ -55,7 +55,7 @@ class CommandTests(unittest.TestCase):
             client,
             args(),
             payload,
-            app_name="gpu-func-custom",
+            app_name="gfaas-custom",
             label="custom run",
             arch="sm_103",
         )
@@ -76,7 +76,7 @@ class CommandTests(unittest.TestCase):
                 "hashes": {"kernel.cu": "digest"},
                 "files": {"kernel.cu": b"int main() {}\n"},
             },
-            app_name="gpu-func-custom",
+            app_name="gfaas-custom",
             label="custom run",
             arch="worker-detected",
         )

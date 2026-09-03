@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.payloads import _materialize_workspace
+from gfaas_cli.payloads import _materialize_workspace
 
 
 class WorkspaceTests(unittest.TestCase):

@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from gfaas import ArtifactOutput, ArtifactRef
-from gpu_func_cli.worker_job import _detect_cuda_arch, _run_process, run
+from gfaas_cli.worker_job import _detect_cuda_arch, _run_process, run
 
 
 class WorkerJobTests(unittest.TestCase):
@@ -74,7 +74,7 @@ class WorkerJobTests(unittest.TestCase):
         self.assertTrue(result["timed_out"])
         self.assertIsNone(result["returncode"])
 
-    @mock.patch("gpu_func_cli.worker_job.subprocess.run")
+    @mock.patch("gfaas_cli.worker_job.subprocess.run")
     def test_cuda_arch_detection_uses_compute_capability(self, run_process):
         run_process.return_value = mock.Mock(stdout="10.3\n")
         self.assertEqual(_detect_cuda_arch(), "sm_103")

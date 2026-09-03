@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.constants import RC_OK, RC_SETUP
-from gpu_func_cli.output import _print_custom_result
+from gfaas_cli.constants import RC_OK, RC_SETUP
+from gfaas_cli.output import _print_custom_result
 
 
 class OutputTests(unittest.TestCase):

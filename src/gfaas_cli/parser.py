@@ -1,4 +1,4 @@
-"""Argparse construction for the public gpu-func command surface."""
+"""Argparse construction for the public gfaas command surface."""
 
 from __future__ import annotations
 
@@ -6,8 +6,10 @@ import argparse
 import os
 import re
 
+from . import general
+
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
-# top-level `gpu-func <mode>` that auto-detects the exercise from the cwd.
+# top-level `gfaas <mode>` that auto-detects the exercise from the cwd.
 EXERCISE_MODES = ["compile", "test", "benchmark", "sanitizer", "profile", "grade"]
 
 
@@ -126,12 +128,17 @@ def _add_common_exercise_opts(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gpu-func")
+    parser = argparse.ArgumentParser(
+        prog="gfaas",
+        description="Run GPU workloads and manage durable Calls and Artifacts.",
+    )
     parser.add_argument("--api-base", default=os.environ.get("GFAAS_API_BASE"))
     parser.add_argument("--request-timeout", type=_positive_float)
     parser.add_argument("--poll-interval", type=_nonnegative_float)
 
-    sub = parser.add_subparsers(dest="command_name")
+    sub = parser.add_subparsers(dest="command_name", required=True)
+
+    general.add_commands(sub)
 
     sub.add_parser("workers", aliases=["pools"], help="List configured gfaas GPU pools")
 
@@ -140,7 +147,7 @@ def build_parser() -> argparse.ArgumentParser:
     exercise.add_argument("exercise_command", choices=EXERCISE_MODES)
     _add_common_exercise_opts(exercise)
 
-    # Top-level shortcuts: `gpu-func benchmark [specs...]` auto-detects the
+    # Top-level shortcuts: `gfaas benchmark [specs...]` auto-detects the
     # exercise from the cwd (an unzipped exercise: run.py + runner/ siblings), so
     # the `exercise <id>` prefix and `--exercise-dir` become optional. Passing
     # --exercise-dir still works from anywhere. With no specs, the runner runs
