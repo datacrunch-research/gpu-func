@@ -1,14 +1,31 @@
 # Command-line interface
 
 The `gfaas` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA
-workflows. It also manages durable Calls and Artifacts. See the [CUDA workflow guide](../GUIDE.md)
-for exercise, benchmark, sanitizer, profiler, and grading commands.
+workflows. It also manages durable Calls and Artifacts. See [CUDA development
+workflows](cuda-workflows.md) for exercise, benchmark, sanitizer, profiler, and grading commands.
 
 The `run` command supports one self-contained source file. It does not package a source tree or
 install local dependencies. The course and custom commands package the selected workspace.
 
 The `.py` and `.cu` suffixes select a runtime. Use `--runtime python` or `--runtime cuda` to
 override the suffix or to use a different suffix.
+
+The command groups have these purposes:
+
+| Command | Purpose |
+| --- | --- |
+| `gfaas run` | Submit one Python or CUDA source file. |
+| `gfaas local` | Inspect or use a CUDA GPU on the local host. |
+| `gfaas call` | Inspect, watch, or cancel a durable Call. |
+| `gfaas artifact` | Download an Artifact. |
+| `gfaas pool` | List the configured GPU pools. |
+| `gfaas completion` | Generate shell-completion setup. |
+| `gfaas custom` | Compile, run, or profile a custom CUDA program. |
+| `gfaas exercise` | Run an action for a CUDA course exercise. |
+| `gfaas report` | Inspect a local Nsight Compute report. |
+
+The top-level `compile`, `test`, `benchmark`, `sanitizer`, `profile`, and `grade` commands
+auto-detect a course exercise from the current directory.
 
 ## Enable shell completion
 
@@ -128,8 +145,8 @@ gfaas run examples/cli/hello_cuda.cu \
   --nvcc-flag=-O3
 ```
 
-The worker selects the architecture for its GPU. Use `--arch` only when the source needs an
-explicit target.
+The remote `run` command passes each `--nvcc-flag` value to `nvcc`. If you omit an architecture
+flag, the `nvcc` configuration in the selected image controls the compilation target.
 
 Run the standalone PyTorch example:
 
@@ -157,6 +174,18 @@ process lists.
 The CLI does not copy `GFAAS_API_KEY` into the workload environment. Use `--env` only for non-secret
 workload values. The coordinator stores workload environment values in the Environment resource.
 
+The global connection options must occur before the command name:
+
+```bash
+gfaas \
+  --api-base https://gpu.example.com/api \
+  --request-timeout 60 \
+  --poll-interval 0.5 \
+  pool list
+```
+
+Use the environment variables for normal operation. The CLI has no API-key option.
+
 ## Run a CUDA file
 
 Create a self-contained `kernel.cu` file. Then submit it:
@@ -171,11 +200,25 @@ uv run gfaas run kernel.cu \
 The `.cu` suffix selects the CUDA runner and the `cuda-nvcc` image. The arguments after `--` go to
 the compiled program.
 
-The worker selects the architecture for its GPU. Use `--arch` only when the source needs an
-explicit target.
+The remote `run` command has no `--arch` option. Use a compiler flag to select an explicit target:
 
-Add `--profile` to collect an Nsight Compute CSV report. Use one `--ncu-arg` option for each
-additional profiler argument.
+```bash
+uv run gfaas run kernel.cu \
+  --gpu-type gb300 \
+  --nvcc-flag=-arch=sm_103
+```
+
+Add `--profile` to collect an Nsight Compute CSV report. With no profiler arguments, the command
+uses `--set full`.
+
+To replace the default, repeat `--ncu-arg` for each profiler argument:
+
+```bash
+uv run gfaas run kernel.cu \
+  --profile \
+  --ncu-arg=--set \
+  --ncu-arg=basic
+```
 
 The compiled program starts in the workload output directory. Declare a file that the Call must
 publish:
@@ -279,6 +322,20 @@ uv run gfaas call artifacts "$call_id"
 uv run gfaas call cancel "$call_id" --reason superseded
 ```
 
+The Call subcommands have these purposes:
+
+| Subcommand | Purpose |
+| --- | --- |
+| `show` | Show the current Call record. |
+| `watch` | Follow retained and new Call events. |
+| `logs` | Read retained standard output and standard error. |
+| `cancel` | Request Call cancellation. |
+| `artifacts` | List the Artifacts that the Call published. |
+
+The `watch` command follows retained and new events. Use `--after CURSOR` to resume after a known
+event. The `logs` command returns retained output and then stops. Add `--follow` to wait for new
+output. All Call subcommands accept `--json`.
+
 If you interrupt a foreground `gfaas run`, the CLI requests remote Call cancellation. Use `--detach`
 before a long Call when the Call must survive a client interruption.
 
@@ -308,3 +365,8 @@ uv run gfaas artifact download art_abc result.bin
 
 The command refuses to replace an existing path. Directory Artifacts retain their tree layout and
 file modes.
+
+If you omit the destination, the CLI uses the Artifact filename. If the Artifact has no filename,
+the CLI uses its Artifact ID.
+
+Add `--json` to return the Artifact ID, destination, and media type as a JSON object.

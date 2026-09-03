@@ -3,6 +3,7 @@
 - [Introduction](introduction.md)
 - [Install and authenticate](install.md)
 - [Command-line interface](cli.md)
+  - [CUDA development workflows](cuda-workflows.md)
 - [First CUDA job](first-cuda-job.md)
 - [Python functions](python-functions.md)
 - [Images](images/index.md)
