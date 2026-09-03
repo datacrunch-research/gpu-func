@@ -40,7 +40,7 @@ The SDK reads these variables:
 
 | Variable                | Meaning                                | Default                 |
 | ----------------------- | -------------------------------------- | ----------------------- |
-| `GFAAS_API_BASE`        | Public API base that ends in `/api`    | `http://127.0.0.1:8000` |
+| `GFAAS_API_BASE`        | Public API base that ends in `/api`    | `http://127.0.0.1:8000/api` |
 | `GFAAS_API_KEY`         | Your API key                           | none                    |
 | `GFAAS_POLL_INTERVAL`   | Poll interval for `wait()`, in seconds | `0.5`                   |
 | `GFAAS_REQUEST_TIMEOUT` | HTTP request timeout, in seconds       | `60`                    |

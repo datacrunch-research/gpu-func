@@ -69,7 +69,7 @@ LIGHTNING_LORA_ALPHA = 32
 DEFAULT_GLOBAL_BATCH_SIZE = 8
 TRAINING_CPU_MILLICORES = 16_000
 TRAINING_CPU_THREADS = TRAINING_CPU_MILLICORES // 1_000
-MINIMUM_TRAINING_MEMORY_GIB = 128
+MINIMUM_TRAINING_MEMORY_GIB = 256
 TRAINING_MEMORY_GIB_PER_GPU = 64
 DEFAULT_TRAINING_SCRATCH_GIB = 64
 MAXIMUM_CHECKPOINT_VERSIONS = 4
@@ -1731,7 +1731,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--memory-gib",
         type=positive_integer,
-        help="Call memory limit in GiB (default: 128 GiB or 64 GiB per GPU, whichever is larger)",
+        help="Call memory limit in GiB (default: 256 GiB or 64 GiB per GPU, whichever is larger)",
     )
     parser.add_argument(
         "--scratch-gib",

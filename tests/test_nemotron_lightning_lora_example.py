@@ -44,6 +44,16 @@ def test_lightning_has_a_separate_pinned_model_contract() -> None:
     assert lightning.MODEL_REVISION == "a9904d24bcc1d289a1950fa9d2b978c47cf903b9"
 
 
+def test_lightning_training_memory_defaults_cover_the_verified_pilot() -> None:
+    example = load_example()
+
+    assert example.training_memory_bytes(1, None) == 256 * 1024**3
+    assert example.training_memory_bytes(2, None) == 256 * 1024**3
+    assert example.training_memory_bytes(4, None) == 256 * 1024**3
+    assert example.training_memory_bytes(8, None) == 512 * 1024**3
+    assert example.training_memory_bytes(1, 192) == 192 * 1024**3
+
+
 def test_lightning_recipe_uses_automodel_mtp(lightning_model_path: Path) -> None:
     example = load_example()
 
