@@ -1,9 +1,8 @@
-"""Adapter from gpu-func workflows to the current gfaas Python SDK."""
+"""Client configuration and adapters for gfaas CLI workflows."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
 import tempfile
@@ -15,10 +14,31 @@ from gfaas import ArtifactRef, Client, ClientConfig, RemoteResult
 from gfaas.errors import GfaasError
 
 from .errors import CliError
+from .events import show_event
 from .worker_job import PROFILE_OUTPUT
 from .worker_job import run as run_worker_job
 
 _TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
+
+
+def client_config_from_args(args: argparse.Namespace) -> ClientConfig:
+    """Build one SDK configuration from environment and global CLI options."""
+    defaults = ClientConfig.from_env()
+    return ClientConfig(
+        api_base=args.api_base or defaults.api_base,
+        api_key=defaults.api_key,
+        poll_interval_s=(
+            args.poll_interval if args.poll_interval is not None else defaults.poll_interval_s
+        ),
+        request_timeout_s=(
+            args.request_timeout if args.request_timeout is not None else defaults.request_timeout_s
+        ),
+    )
+
+
+def sdk_client_from_args(args: argparse.Namespace) -> Client:
+    """Create the shared SDK client for a parsed CLI command."""
+    return Client(client_config_from_args(args))
 
 
 class GfaasClient:
@@ -30,19 +50,7 @@ class GfaasClient:
 
     @classmethod
     def from_args(cls, args: argparse.Namespace) -> Self:
-        defaults = ClientConfig.from_env()
-        config = ClientConfig(
-            api_base=args.api_base or defaults.api_base,
-            api_key=defaults.api_key,
-            poll_interval_s=(
-                args.poll_interval if args.poll_interval is not None else defaults.poll_interval_s
-            ),
-            request_timeout_s=(
-                args.request_timeout
-                if args.request_timeout is not None
-                else defaults.request_timeout_s
-            ),
-        )
+        config = client_config_from_args(args)
         return cls(Client(config), poll_interval=config.poll_interval_s)
 
     def close(self) -> None:
@@ -93,7 +101,7 @@ class GfaasClient:
                 filename=f"{app_name}-workspace",
             )
             print(
-                f"[gpu-func] workspace artifact={uploaded['id']} "
+                f"[gfaas] workspace artifact={uploaded['id']} "
                 f"files={len(uploaded.get('child_artifact_ids', []))}",
                 file=sys.stderr,
             )
@@ -143,7 +151,7 @@ class GfaasClient:
             while not terminal:
                 page = self._client.list_events(remote.call_id, after=cursor, limit=1000)
                 for event in page.get("items", []):
-                    self._show_event(event, json_output=json_events)
+                    show_event(event, json_output=json_events, json_envelope=False)
                     event_cursor = event.get("cursor")
                     if event_cursor is not None:
                         cursor = str(event_cursor)
@@ -165,14 +173,14 @@ class GfaasClient:
             result = remote.wait(timeout_s=remaining)
         except KeyboardInterrupt:
             try:
-                remote.cancel(reason="gpu-func client interrupted")
+                remote.cancel(reason="gfaas client interrupted")
                 print(
-                    f"[gpu-func] cancellation requested call={remote.call_id}",
+                    f"[gfaas] cancellation requested call={remote.call_id}",
                     file=sys.stderr,
                 )
             except Exception as cancel_error:
                 print(
-                    f"[gpu-func] cancellation failed call={remote.call_id}: {cancel_error}",
+                    f"[gfaas] cancellation failed call={remote.call_id}: {cancel_error}",
                     file=sys.stderr,
                 )
             raise
@@ -199,7 +207,7 @@ class GfaasClient:
             return []
         destination.mkdir(parents=True, exist_ok=True)
         downloaded: list[Path] = []
-        with tempfile.TemporaryDirectory(prefix="gpu-func-profiles-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="gfaas-profiles-") as temporary:
             temporary_root = Path(temporary)
             for index, publication in enumerate(publications):
                 artifact = publication.get("artifact")
@@ -220,36 +228,3 @@ class GfaasClient:
                     shutil.copyfile(source, target)
                     downloaded.append(target)
         return downloaded
-
-    @staticmethod
-    def _show_event(event: dict[str, Any], *, json_output: bool) -> None:
-        if json_output:
-            print(json.dumps(event, separators=(",", ":"), sort_keys=True))
-            return
-        event_type = event.get("type")
-        if event_type in {"stdout", "stderr"}:
-            stream = sys.stdout if event_type == "stdout" else sys.stderr
-            print(str(event.get("stream_data", "")), end="", file=stream, flush=True)
-            return
-        attributes = event.get("attributes")
-        attributes = attributes if isinstance(attributes, dict) else {}
-        if event_type == "state":
-            state = event.get("state") or attributes.get("state") or "unknown"
-            worker = attributes.get("worker_id")
-            suffix = f" worker={worker}" if worker else ""
-            print(f"[gpu-func] state={state}{suffix}", file=sys.stderr)
-        elif event_type == "preparation":
-            print(
-                "[gpu-func] preparation"
-                f" phase={attributes.get('phase', 'unknown')}"
-                f" files={attributes.get('completed_files', 0)}"
-                f" bytes={attributes.get('completed_bytes', 0)}",
-                file=sys.stderr,
-            )
-        elif event_type == "diagnostic" and attributes.get("type") == "placement_rejection":
-            print(
-                "[gpu-func] waiting for capacity"
-                f" reason={attributes.get('reason', 'unknown')}"
-                f" worker={attributes.get('worker_id', 'unknown')}",
-                file=sys.stderr,
-            )

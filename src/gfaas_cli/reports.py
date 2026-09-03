@@ -25,13 +25,13 @@ def _cmd_report(args: argparse.Namespace) -> int:
 def _cmd_report_summary(args: argparse.Namespace) -> int:
     report_path = _validate_ncu_report_path(args.report)
     try:
-        ncu_utils = importlib.import_module("gpu_func_cli.assets.course_runner.ncu_utils")
+        ncu_utils = importlib.import_module("gfaas_cli.assets.course_runner.ncu_utils")
         if getattr(ncu_utils, "ncu_report", None) is None:
             raise CliError(
                 "ncu_report.py is not available. Install Nsight Compute or set "
                 "PYTHONPATH to its extras/python directory."
             )
-        profile_mod = importlib.import_module("gpu_func_cli.assets.course_runner.profile")
+        profile_mod = importlib.import_module("gfaas_cli.assets.course_runner.profile")
     except CliError:
         raise
     except Exception as exc:
@@ -137,7 +137,7 @@ def _cmd_report_feedback(args: argparse.Namespace) -> int:
 
     try:
         spec = importlib.util.spec_from_file_location(
-            f"gpu_func_cli_{args.exercise.replace('-', '_')}_run",
+            f"gfaas_cli_{args.exercise.replace('-', '_')}_run",
             exercise_run_py,
         )
         if spec is None or spec.loader is None:

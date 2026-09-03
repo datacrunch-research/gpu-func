@@ -1,10 +1,11 @@
 # Command-line interface
 
-The `gfaas` command submits one Python or CUDA source file. It also manages Calls and downloads
-Artifacts.
+The `gfaas` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA
+workflows. It also manages durable Calls and Artifacts. See the [CUDA workflow guide](../GUIDE.md)
+for exercise, benchmark, sanitizer, profiler, and grading commands.
 
-The first CLI version supports one self-contained source file. It does not package a source tree or
-install local dependencies.
+The `run` command supports one self-contained source file. It does not package a source tree or
+install local dependencies. The course and custom commands package the selected workspace.
 
 The `.py` and `.cu` suffixes select a runtime. Use `--runtime python` or `--runtime cuda` to
 override the suffix or to use a different suffix.

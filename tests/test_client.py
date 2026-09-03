@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.client import GfaasClient
-from gpu_func_cli.errors import CliError
+from gfaas_cli.client import GfaasClient
+from gfaas_cli.errors import CliError
 
 
 class FakeRemote:
@@ -120,7 +120,7 @@ class ClientTests(unittest.TestCase):
                 job={"target": {"kind": "custom"}},
                 workspace=Path(temporary),
                 args=args(),
-                app_name="gpu-func-custom",
+                app_name="gfaas-custom",
             )
 
         self.assertIs(remote, sdk.remote)

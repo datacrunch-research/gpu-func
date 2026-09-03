@@ -35,7 +35,7 @@ def run(
 ) -> dict[str, Any]:
     """Run one validated custom-kernel or CUDA-course job."""
     try:
-        with tempfile.TemporaryDirectory(prefix="gpu-func-", dir=scratch_path()) as temporary:
+        with tempfile.TemporaryDirectory(prefix="gfaas-", dir=scratch_path()) as temporary:
             workdir = Path(temporary, "workspace")
             shutil.copytree(workspace.path, workdir, symlinks=False)
             _make_workspace_writable(workdir)
@@ -180,7 +180,7 @@ def _run_course_runner(
     )
 
     report_json = None
-    json_name = spec.get("json_out", "_gpu_func_cli.json")
+    json_name = spec.get("json_out", "_gfaas_cli.json")
     json_path = cwd / json_name
     if json_path.is_file():
         try:

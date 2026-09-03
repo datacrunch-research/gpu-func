@@ -42,6 +42,8 @@ def test_documented_public_sdk_surface_is_available() -> None:
 def test_package_contains_only_client_modules() -> None:
     assert importlib.util.find_spec("gfaas.image_release") is None
     assert importlib.util.find_spec("gfaas.wire") is None
+    assert importlib.util.find_spec("gfaas.cli") is None
+    assert importlib.util.find_spec("gpu_func_cli") is None
 
 
 def test_project_dependencies_are_self_contained() -> None:
@@ -50,6 +52,12 @@ def test_project_dependencies_are_self_contained() -> None:
 
     assert all("../gfaas" not in dependency for dependency in dependencies)
     assert "sources" not in document.get("tool", {}).get("uv", {})
+
+
+def test_project_installs_one_gfaas_command() -> None:
+    document = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert document["project"]["scripts"] == {"gfaas": "gfaas_cli.main:entrypoint"}
 
 
 def test_project_declares_the_apache_license() -> None:

@@ -78,7 +78,7 @@ def _cmd_custom(args: argparse.Namespace) -> int:
             client,
             args,
             payload,
-            app_name="gpu-func-custom",
+            app_name="gfaas-custom",
             label=f"custom {args.custom_command}",
             arch=arch or "worker-detected",
         )
@@ -217,7 +217,7 @@ def _run_exercise_payload(
         client,
         args,
         payload,
-        app_name="gpu-func-course",
+        app_name="gfaas-course",
         label=mode,
         arch=arch or "worker-detected",
     )
@@ -262,7 +262,7 @@ def _submit_payload(
         f"Remote {label} on {args.gpu_type} (gpus={args.gpu_count}), "
         f"image={args.image}, arch={arch}"
     )
-    with tempfile.TemporaryDirectory(prefix="gpu-func-workspace-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="gfaas-workspace-") as temporary:
         workspace = Path(temporary, "workspace")
         job = _materialize_workspace(payload, workspace)
         remote = client.submit_job(
@@ -288,7 +288,7 @@ def _submit_payload(
             artifact = publication.get("artifact")
             artifact_id = artifact.get("id") if isinstance(artifact, dict) else "unknown"
             print(
-                f"[gpu-func] profile artifact={artifact_id}; use --artifact-dir to download it",
+                f"[gfaas] profile artifact={artifact_id}; use --artifact-dir to download it",
                 file=sys.stderr,
             )
     return result, remote.call_id, downloaded

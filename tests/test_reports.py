@@ -3,8 +3,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from gpu_func_cli.errors import CliError
-from gpu_func_cli.reports import _cmd_report_feedback
+from gfaas_cli.errors import CliError
+from gfaas_cli.reports import _cmd_report_feedback
 
 
 class ReportTests(unittest.TestCase):

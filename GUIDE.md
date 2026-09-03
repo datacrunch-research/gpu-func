@@ -1,6 +1,6 @@
-# gpu-func guide
+# gfaas guide
 
-`gpu-func` is for people who have CUDA source code but do not have the right
+`gfaas` is for people who have CUDA source code but do not have the right
 GPU available locally. It sends a small, selected workspace to a remote GPU
 worker. The worker compiles the code, runs it, and returns the result.
 
@@ -13,7 +13,7 @@ You can use this guide in either of these situations:
 
 You do not need a local CUDA installation, `nvcc`, or an NVIDIA GPU. You also
 do not need to understand the gfaas API before you start. You need the
-`gpu-func` command, service credentials, and either an exercise or CUDA source
+`gfaas` command, service credentials, and either an exercise or CUDA source
 file.
 
 The CLI supports two types of work:
@@ -28,7 +28,7 @@ as a gfaas Artifact. You can download the report and inspect it locally.
 
 gfaas is the remote execution service behind this CLI. It schedules each Call
 on a compatible worker and keeps the Call state after the local command ends.
-`gpu-func` turns the service into a CUDA development workflow. It does not
+`gfaas` turns the service into a CUDA development workflow. It does not
 generate kernels or decide whether a custom program produced the right answer.
 
 This guide starts with the purpose of each workflow. The command reference and
@@ -77,7 +77,7 @@ Use these actions as a development loop:
 4. Run `benchmark` to compare implementations.
 5. When timing alone does not explain a result, run `profile`.
 
-The exercise owns its tests and measurements. `gpu-func` supplies the remote
+The exercise owns its tests and measurements. `gfaas` supplies the remote
 GPU and transports the files and results.
 
 ### Custom CUDA program
@@ -101,21 +101,17 @@ memory layout, a launch-configuration comparison, or a reduced compiler error.
 
 ### Install
 
-Install the SDK and CUDA client from this repository:
+Install the SDK and CLI from this repository:
 
 ```bash
 uv tool install /path/to/gpu-func
 ```
 
-Make sure that both commands are available:
+Make sure that the command is available:
 
 ```bash
 gfaas --help
-gpu-func --help
 ```
-
-The package also installs `gpu_func_cli`. This command is a compatibility name
-for older scripts. This guide uses the shorter `gpu-func` name.
 
 Your local computer does not need CUDA for remote work. The local report
 commands need the Python module from Nsight Compute, but they do not need a GPU.
@@ -135,13 +131,13 @@ shell history and process list.
 Show the GPU pools that the coordinator provides:
 
 ```bash
-gpu-func pools
+gfaas pool list
 ```
 
 A pool is a class of GPU capacity, such as `gb300`. It is not a specific
 worker. The coordinator selects a worker when it places the Call.
 
-If the coordinator has one pool, `gpu-func` selects it automatically. If it
+If the coordinator has one pool, `gfaas` selects it automatically. If it
 has multiple pools, use `--gpu-type` to select one.
 
 ## 3. Work on a course exercise
@@ -178,13 +174,13 @@ cd 01-haxpy
 Compile your current solution:
 
 ```bash
-gpu-func compile
+gfaas compile
 ```
 
 Run the correctness suite:
 
 ```bash
-gpu-func test
+gfaas test
 ```
 
 The CLI finds the exercise from the current directory. You can start in a
@@ -196,8 +192,8 @@ With no spec argument, the exercise runner uses all applicable specs. Supply
 one or more paths to shorten an iteration:
 
 ```bash
-gpu-func test tests/01_corner_n1.txt
-gpu-func benchmark benchmarks/01_aligned_small.txt
+gfaas test tests/01_corner_n1.txt
+gfaas benchmark benchmarks/01_aligned_small.txt
 ```
 
 Use a narrow spec while you diagnose a specific error. Before completion,
@@ -208,13 +204,13 @@ run the complete suite without spec arguments.
 When you do not want to change directories, use `--exercise-dir`:
 
 ```bash
-gpu-func benchmark --exercise-dir ~/Downloads/01-haxpy
+gfaas benchmark --exercise-dir ~/Downloads/01-haxpy
 ```
 
 Use `--file` to replace the solution file for one remote Call:
 
 ```bash
-gpu-func test \
+gfaas test \
   --exercise-dir ~/Downloads/01-haxpy \
   --file ~/src/my-haxpy.cu
 ```
@@ -227,7 +223,7 @@ selected file into the uploaded workspace.
 The explicit form works with a complete course checkout:
 
 ```bash
-gpu-func exercise 01-haxpy benchmark \
+gfaas exercise 01-haxpy benchmark \
   --course-root ~/src/cuda-course
 ```
 
@@ -258,13 +254,13 @@ The worker builds a real executable. One submitted source file must define
 When the source file defines `main()`, submit it without a harness:
 
 ```bash
-gpu-func custom run vecadd.cu
+gfaas custom run vecadd.cu
 ```
 
 When the kernel source does not define `main()`, use a harness:
 
 ```bash
-gpu-func custom run scale_kernel.cu \
+gfaas custom run scale_kernel.cu \
   --harness scale_harness.cu
 ```
 
@@ -277,7 +273,7 @@ can also run one kernel with different shapes or data types.
 
 ### 4.2 Make correctness observable
 
-`gpu-func` treats exit code zero as a successful custom run. It does not inspect
+`gfaas` treats exit code zero as a successful custom run. It does not inspect
 the numerical output.
 
 Make the program compare its output with an expected result. Return a nonzero
@@ -296,7 +292,7 @@ Your harness answers the second question.
 Repeat `--arg` for each argument to `main()`:
 
 ```bash
-gpu-func custom run scale_kernel.cu \
+gfaas custom run scale_kernel.cu \
   --harness scale_harness.cu \
   --arg 1048576 \
   --arg 2.5
@@ -315,7 +311,7 @@ The default compiler flags are:
 Replace them with `--nvcc-flags`:
 
 ```bash
-gpu-func custom run kernel.cu \
+gfaas custom run kernel.cu \
   --nvcc-flags "-std=c++20 -O2 -lineinfo --use_fast_math"
 ```
 
@@ -340,7 +336,7 @@ range.
 When the program has an NVTX structure, use its range name:
 
 ```bash
-gpu-func custom profile kernel.cu \
+gfaas custom profile kernel.cu \
   --nvtx-range attention_forward \
   --artifact-dir ./profiles
 ```
@@ -348,7 +344,7 @@ gpu-func custom profile kernel.cu \
 If the program has no NVTX range, profile the complete executable:
 
 ```bash
-gpu-func custom profile kernel.cu \
+gfaas custom profile kernel.cu \
   --no-nvtx-filter \
   --artifact-dir ./profiles
 ```
@@ -435,7 +431,7 @@ int main(int argc, char** argv) {
 ### 5.2 Compile the program
 
 ```bash
-gpu-func custom compile vecadd.cu
+gfaas custom compile vecadd.cu
 ```
 
 This action checks that `nvcc` can compile and link the source. It does not
@@ -444,7 +440,7 @@ allocate GPU memory or launch the kernel.
 ### 5.3 Run the program
 
 ```bash
-gpu-func custom run vecadd.cu --arg 1048576
+gfaas custom run vecadd.cu --arg 1048576
 ```
 
 A successful result contains text similar to:
@@ -457,7 +453,7 @@ Custom run passed
 ### 5.4 Create a profile
 
 ```bash
-gpu-func custom profile vecadd.cu \
+gfaas custom profile vecadd.cu \
   --arg 1048576 \
   --artifact-dir ./profiles
 ```
@@ -470,7 +466,7 @@ downloads that file into `./profiles` after the Call finishes.
 If Nsight Compute is installed locally, summarize the report:
 
 ```bash
-gpu-func report summary ./profiles/vecadd.ncu-rep --per-kernel
+gfaas report summary ./profiles/vecadd.ncu-rep --per-kernel
 ```
 
 The summary can show duration, DRAM traffic, throughput, occupancy,
@@ -517,7 +513,7 @@ Custom profiling uses `--set basic` by default. When the basic report cannot
 answer the question, use a larger metric set:
 
 ```bash
-gpu-func custom profile vecadd.cu \
+gfaas custom profile vecadd.cu \
   --ncu-args "--set full" \
   --artifact-dir ./profiles-full
 ```
@@ -544,10 +540,10 @@ does not erase the Call or its retained events.
 Use `--detach` to return after submission:
 
 ```bash
-gpu-func custom run vecadd.cu --detach
+gfaas custom run vecadd.cu --detach
 ```
 
-Inspect the Call with the general gfaas CLI:
+Inspect the Call with the same `gfaas` command:
 
 ```bash
 gfaas call show call_...
@@ -567,7 +563,7 @@ Cancel a detached Call explicitly:
 gfaas call cancel call_... --reason "experiment no longer needed"
 ```
 
-If you interrupt a foreground `gpu-func` command, the CLI requests remote Call
+If you interrupt a foreground `gfaas` command, the CLI requests remote Call
 cancellation. The CLI prints the Call identity so that you can inspect its final
 state with `gfaas call show`.
 
@@ -584,7 +580,7 @@ can continue. Use its Call identity to inspect or cancel it.
 When a script can repeat the same submission, use an idempotency key:
 
 ```bash
-gpu-func custom run vecadd.cu \
+gfaas custom run vecadd.cu \
   --idempotency-key vecadd-baseline-2026-08-27
 ```
 
@@ -599,11 +595,15 @@ The worker publishes reports through a declared `profiles` output Artifact.
 Use `--artifact-dir` to download them immediately:
 
 ```bash
-gpu-func custom profile vecadd.cu --artifact-dir ./profiles
+gfaas custom profile vecadd.cu --artifact-dir ./profiles
 ```
 
 Without `--artifact-dir`, the CLI prints the Artifact identity. Download it
-later with the gfaas CLI.
+later with the same command:
+
+```bash
+gfaas artifact download art_... ./profiles
+```
 
 The CLI does not replace an existing local report. Select a new directory for
 each experiment, or remove the old file first.
@@ -615,7 +615,7 @@ each experiment, or remove the old file first.
 If the coordinator has multiple pools, select the required pool:
 
 ```bash
-gpu-func custom run vecadd.cu --gpu-type gb300
+gfaas custom run vecadd.cu --gpu-type gb300
 ```
 
 The pool name describes scheduler capacity. It does not select a specific tray
@@ -630,7 +630,7 @@ For custom programs, the worker detects the compute capability when `--arch`
 is absent. Use an explicit architecture for reproducibility or special code:
 
 ```bash
-gpu-func custom run vecadd.cu \
+gfaas custom run vecadd.cu \
   --gpu-type gb300 \
   --arch sm_103
 ```
@@ -641,7 +641,7 @@ These values describe related but different requirements.
 ### Request multiple GPUs
 
 ```bash
-gpu-func custom run multi_gpu.cu \
+gfaas custom run multi_gpu.cu \
   --gpu-type gb300 \
   --gpu-count 4
 ```
@@ -668,7 +668,7 @@ Sizes accept values such as `512MiB`, `4GiB`, and `1TiB`.
 Example:
 
 ```bash
-gpu-func custom profile vecadd.cu \
+gfaas custom profile vecadd.cu \
   --gpu-type gb300 \
   --memory 64GiB \
   --storage 32GiB \
@@ -686,8 +686,8 @@ The worker policy can reject a request that exceeds its configured ceiling.
 The summary command reads a local `.ncu-rep` file:
 
 ```bash
-gpu-func report summary ./profiles/vecadd.ncu-rep
-gpu-func report summary ./profiles/vecadd.ncu-rep --per-kernel
+gfaas report summary ./profiles/vecadd.ncu-rep
+gfaas report summary ./profiles/vecadd.ncu-rep --per-kernel
 ```
 
 This command needs `ncu_report.py`. Nsight Compute supplies this module. The
@@ -705,7 +705,7 @@ Some courses define rules that convert counters into exercise-specific advice.
 The feedback command uses those rules:
 
 ```bash
-gpu-func report feedback ./profiles/haxpy.ncu-rep \
+gfaas report feedback ./profiles/haxpy.ncu-rep \
   --course-dir ~/src/cuda-course \
   --exercise 01-haxpy \
   --benchmark benchmarks/01_aligned_small.txt \
@@ -738,7 +738,7 @@ remain byte-for-byte unchanged in the tree Artifact.
 The coordinator offers the Call to a compatible GPU pool. A worker can reject
 the offer when GPUs or other resources are busy.
 
-While a Call waits, `gpu-func` shows capacity events. After placement, the
+While a Call waits, `gfaas` shows capacity events. After placement, the
 worker resolves the image and stages the source, input, and workspace Artifacts.
 
 ### Execution
@@ -765,18 +765,19 @@ scratch copy when the worker function ends.
 ### Pools
 
 ```bash
-gpu-func pools
-gpu-func workers       # compatibility name
+gfaas pool list
+gfaas pools         # compatibility shortcut
+gfaas workers       # compatibility shortcut
 ```
 
 ### Course exercises
 
 ```bash
 # Find the exercise from the current directory.
-gpu-func <compile|test|benchmark|sanitizer|profile|grade> [specs...] [options]
+gfaas <compile|test|benchmark|sanitizer|profile|grade> [specs...] [options]
 
 # Select an exercise from a complete course checkout.
-gpu-func exercise EXERCISE_ID \
+gfaas exercise EXERCISE_ID \
   <compile|test|benchmark|sanitizer|profile|grade> \
   [specs...] [options]
 ```
@@ -796,9 +797,9 @@ Important exercise options:
 ### Custom programs
 
 ```bash
-gpu-func custom compile SOURCE.cu [--harness HARNESS.cu] [options]
-gpu-func custom run SOURCE.cu [--harness HARNESS.cu] [options]
-gpu-func custom profile SOURCE.cu [--harness HARNESS.cu] [options]
+gfaas custom compile SOURCE.cu [--harness HARNESS.cu] [options]
+gfaas custom run SOURCE.cu [--harness HARNESS.cu] [options]
+gfaas custom profile SOURCE.cu [--harness HARNESS.cu] [options]
 ```
 
 Important custom options:
@@ -834,7 +835,7 @@ Important custom options:
 Global connection options must appear before the subcommand:
 
 ```bash
-gpu-func --api-base https://gpu.example.com/api \
+gfaas --api-base https://gpu.example.com/api \
   --request-timeout 60 \
   --poll-interval 1 \
   custom run vecadd.cu
@@ -891,12 +892,12 @@ Make sure that `GFAAS_API_BASE` contains the public API path. Make sure that
 Show the available pools:
 
 ```bash
-gpu-func pools
+gfaas pool list
 ```
 
 ### The requested GPU pool is not configured
 
-Run `gpu-func pools` and select one of the reported names with
+Run `gfaas pool list` and select one of the reported names with
 `--gpu-type`.
 
 ### The Call waits for capacity

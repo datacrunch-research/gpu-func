@@ -1,9 +1,45 @@
 import unittest
 
-from gpu_func_cli.parser import build_parser
+from gfaas_cli.client import client_config_from_args
+from gfaas_cli.parser import build_parser
 
 
 class ParserTests(unittest.TestCase):
+    def test_parser_uses_gfaas_name_and_includes_both_command_families(self):
+        parser = build_parser()
+
+        self.assertEqual(parser.prog, "gfaas")
+        self.assertEqual(parser.parse_args(["call", "show", "call_1"]).call_command, "show")
+        self.assertEqual(
+            parser.parse_args(["artifact", "download", "art_1"]).artifact_command,
+            "download",
+        )
+        self.assertEqual(
+            parser.parse_args(["custom", "run", "kernel.cu"]).custom_command,
+            "run",
+        )
+
+    def test_global_connection_options_configure_generic_commands(self):
+        args = build_parser().parse_args(
+            [
+                "--api-base",
+                "https://gpu.example.com/api",
+                "--request-timeout",
+                "12",
+                "--poll-interval",
+                "0.25",
+                "call",
+                "show",
+                "call_1",
+            ]
+        )
+
+        config = client_config_from_args(args)
+
+        self.assertEqual(config.api_base, "https://gpu.example.com/api")
+        self.assertEqual(config.request_timeout_s, 12)
+        self.assertEqual(config.poll_interval_s, 0.25)
+
     def test_custom_parser_defaults_and_repeatable_args(self):
         args = build_parser().parse_args(
             ["custom", "profile", "kernel.cu", "--arg", "7", "--arg", "x"]
