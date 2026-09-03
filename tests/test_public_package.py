@@ -52,6 +52,14 @@ def test_project_dependencies_are_self_contained() -> None:
     assert "sources" not in document.get("tool", {}).get("uv", {})
 
 
+def test_project_declares_the_apache_license() -> None:
+    document = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert document["project"]["license"] == "Apache-2.0"
+    assert document["project"]["license-files"] == ["LICENSE"]
+    assert (ROOT / "LICENSE").is_file()
+
+
 def test_documentation_local_links_resolve() -> None:
     documents = [ROOT / "README.md", ROOT / "GUIDE.md"]
     documents.extend((ROOT / "docs").rglob("*.md"))
