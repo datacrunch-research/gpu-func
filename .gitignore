@@ -1,4 +1,5 @@
 docs-archive/
+docs/target/
 .agents
 .codex
 .venv

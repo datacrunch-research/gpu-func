@@ -168,6 +168,7 @@ uv run --extra training-example python examples/nemotron_lightning_lora.py \
   --training-data training.jsonl \
   --gpu-type "$GFAAS_GPU_TYPE" \
   --gpu-count 1 \
+  --memory-gib 256 \
   --sequence-length 8192 \
   --maximum-samples 8 \
   --max-steps 1 \
