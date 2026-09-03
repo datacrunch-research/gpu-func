@@ -92,6 +92,12 @@ jobs:
           python -m pip install --disable-pip-version-check build
           python -m build
 
+      - name: Check wheel license
+        run: >-
+          python -c 'import glob, zipfile; wheel, = glob.glob("dist/*.whl");
+          assert any(name.endswith(".dist-info/licenses/LICENSE")
+          for name in zipfile.ZipFile(wheel).namelist())'
+
       - name: Install and smoke-test the wheel
         run: |
           python -m venv "${RUNNER_TEMP}/package-check"
