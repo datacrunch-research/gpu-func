@@ -151,6 +151,9 @@ def test_run_submits_cuda_file_with_resources_and_program_arguments(
     assert submission["memory_bytes"] == 2 * 1024**3
     assert [output.name for output in submission["outputs"]] == ["benchmark"]
     assert submission["outputs"][0].relative_path == "results.csv"
+    assert [stage.name for stage in submission["stages"]] == ["compile", "execute"]
+    assert submission["stages"][0].resources == {"gpu": {"count": 0}}
+    assert submission["stages"][1].artifacts[0].output == "compiled-cuda"
     assert submission["kwargs"] == {
         "source": "int main() { return 0; }\n",
         "profile": False,
@@ -310,7 +313,15 @@ def test_foreground_human_output_summarizes_lifecycle_events(
     remote = FakeRemoteResult(
         result={"phase": "run", "returncode": 0, "compile_ms": 12, "run_ms": 4},
         events=[
-            {"cursor": "0", "type": "state", "state": "queued"},
+            {
+                "cursor": "0",
+                "type": "state",
+                "state": "queued",
+                "attributes": {
+                    "stage": "compile",
+                    "stage_state": "waiting_for_capacity",
+                },
+            },
             {
                 "cursor": "1",
                 "type": "diagnostic",
@@ -352,7 +363,7 @@ def test_foreground_human_output_summarizes_lifecycle_events(
     assert cli.main(["run", str(source)], client_factory=_factory(FakeClient(remote))) == 0
 
     captured = capsys.readouterr()
-    assert "[vfunc] state=queued" in captured.err
+    assert "[vfunc] state=queued stage=compile stage-state=waiting_for_capacity" in captured.err
     assert (
         "[vfunc] waiting for capacity reason=gpu_occupancy worker=gb300-01 generation=2"
         in captured.err

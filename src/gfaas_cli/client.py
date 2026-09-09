@@ -10,12 +10,24 @@ import time
 from pathlib import Path
 from typing import Any, Self
 
-from gfaas import ArtifactRef, Client, ClientConfig, RemoteResult
+from gfaas import (
+    ArtifactOutput,
+    ArtifactRef,
+    CallStage,
+    Client,
+    ClientConfig,
+    RemoteResult,
+    StageArtifactBinding,
+)
 from gfaas.errors import GfaasError
 
 from .errors import CliError
 from .events import show_event
-from .worker_job import PROFILE_OUTPUT
+from .worker_job import (
+    COMPILED_CUSTOM_ARTIFACT_ENV,
+    COMPILED_CUSTOM_OUTPUT,
+    PROFILE_OUTPUT,
+)
 from .worker_job import run as run_worker_job
 
 _TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
@@ -105,6 +117,33 @@ class GfaasClient:
                 f"files={len(uploaded.get('child_artifact_ids', []))}",
                 file=sys.stderr,
             )
+            mode = job.get("command", {}).get("mode")
+            stages: tuple[CallStage, ...] = ()
+            gpu_count = args.gpu_count
+            outputs: tuple[ArtifactOutput, ...] = (PROFILE_OUTPUT,)
+            if mode in {"compile", "custom-compile"}:
+                gpu_count = 0
+                outputs = ()
+            elif job.get("target", {}).get("kind") == "custom":
+                stages = (
+                    CallStage(
+                        name="compile",
+                        qualname="compile_custom_stage",
+                        resources={"gpu": {"count": 0}},
+                        outputs=(COMPILED_CUSTOM_OUTPUT,),
+                    ),
+                    CallStage(
+                        name="execute",
+                        qualname="execute_custom_stage",
+                        artifacts=(
+                            StageArtifactBinding(
+                                from_stage="compile",
+                                output=COMPILED_CUSTOM_OUTPUT.name,
+                                env=COMPILED_CUSTOM_ARTIFACT_ENV,
+                            ),
+                        ),
+                    ),
+                )
             return self._client.submit(
                 image=args.image,
                 function=run_worker_job,
@@ -113,7 +152,7 @@ class GfaasClient:
                     "workspace": ArtifactRef(str(uploaded["id"])),
                     "profile_output": PROFILE_OUTPUT,
                 },
-                gpu_count=args.gpu_count,
+                gpu_count=gpu_count,
                 gpu_type=args.gpu_type,
                 app_name=app_name,
                 timeout_s=args.timeout,
@@ -126,7 +165,8 @@ class GfaasClient:
                 max_output_bytes=args.max_output,
                 env=dict(args.env),
                 idempotency_key=args.idempotency_key,
-                outputs=(PROFILE_OUTPUT,),
+                outputs=outputs,
+                stages=stages,
             )
         except (GfaasError, OSError, ValueError) as exc:
             raise CliError(str(exc)) from exc

@@ -10,6 +10,7 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import traceback
@@ -25,6 +26,14 @@ PROFILE_OUTPUT = ArtifactOutput.directory(
     required=False,
     publish_on_failure=True,
 )
+COMPILED_CUSTOM_OUTPUT = ArtifactOutput.directory(
+    "compiled-custom",
+    "compiled-custom",
+    kind="other",
+    publish_on_failure=False,
+)
+COMPILED_CUSTOM_ARTIFACT_ENV = "GFAAS_COMPILED_CUSTOM_ARTIFACT_ID"
+_COMPILE_MANIFEST = ".vfunc-compile.json"
 
 
 def run(
@@ -67,6 +76,88 @@ def run(
         }
 
 
+def compile_custom_stage(
+    *,
+    job: dict[str, Any],
+    workspace: ArtifactRef,
+    profile_output: ArtifactOutput = PROFILE_OUTPUT,
+) -> dict[str, Any]:
+    """Compile a custom CUDA workspace without reserving a GPU."""
+    del profile_output
+    if job.get("target", {}).get("kind") != "custom":
+        raise ValueError("the compile stage requires a custom CUDA job")
+    with tempfile.TemporaryDirectory(prefix="gfaas-", dir=scratch_path()) as temporary:
+        workdir = Path(temporary, "workspace")
+        shutil.copytree(workspace.path, workdir, symlinks=False)
+        _make_workspace_writable(workdir)
+        file_hashes = _verify_workspace(workdir, job.get("hashes", {}))
+        deadline = time.monotonic() + int(job.get("remote", {}).get("timeout_s", 600))
+        compile_result = _compile_custom_job(workdir, job, deadline)
+        if compile_result.get("stdout"):
+            print(compile_result["stdout"], end="")
+        if compile_result.get("stderr"):
+            print(compile_result["stderr"], end="", file=sys.stderr)
+        if compile_result["timed_out"]:
+            raise TimeoutError("nvcc exceeded the Call time budget")
+        if compile_result["returncode"] != 0:
+            raise RuntimeError(f"nvcc exited with status {compile_result['returncode']}")
+
+        manifest = {
+            "schema": "vfunc.custom-compiled/v1",
+            "compile": compile_result,
+            "identity": _custom_compile_identity(job, file_hashes),
+        }
+        Path(workdir, _COMPILE_MANIFEST).write_text(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+        shutil.copytree(workdir, COMPILED_CUSTOM_OUTPUT.path)
+        return compile_result
+
+
+def execute_custom_stage(
+    *,
+    job: dict[str, Any],
+    workspace: ArtifactRef,
+    profile_output: ArtifactOutput = PROFILE_OUTPUT,
+) -> dict[str, Any]:
+    """Execute a compiled custom CUDA Artifact after GPU acquisition."""
+    del workspace
+    artifact_id = os.environ.get(COMPILED_CUSTOM_ARTIFACT_ENV)
+    if not artifact_id:
+        raise RuntimeError("compiled custom CUDA Artifact was not staged for execution")
+    compiled = ArtifactRef(artifact_id)
+    with tempfile.TemporaryDirectory(prefix="gfaas-", dir=scratch_path()) as temporary:
+        workdir = Path(temporary, "workspace")
+        shutil.copytree(compiled.path, workdir, symlinks=False)
+        _make_workspace_writable(workdir)
+        manifest_path = workdir / _COMPILE_MANIFEST
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("compiled custom CUDA Artifact has an invalid manifest") from exc
+        file_hashes = _verify_workspace(workdir, job.get("hashes", {}))
+        if manifest.get("schema") != "vfunc.custom-compiled/v1" or manifest.get(
+            "identity"
+        ) != _custom_compile_identity(job, file_hashes):
+            raise ValueError("compiled custom CUDA Artifact does not match the submitted job")
+        compile_result = manifest.get("compile")
+        if not isinstance(compile_result, dict) or compile_result.get("returncode") != 0:
+            raise ValueError("compiled custom CUDA Artifact has no successful compilation")
+        binary = workdir / str(job["custom"]["output"])
+        if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
+            raise ValueError("compiled custom CUDA Artifact has no executable binary")
+        deadline = time.monotonic() + int(job.get("remote", {}).get("timeout_s", 600))
+        return _run_compiled_custom_job(
+            workdir,
+            job,
+            file_hashes,
+            deadline,
+            profile_output,
+            compile_result,
+        )
+
+
 def _run_custom_job(
     workdir: Path,
     job: dict[str, Any],
@@ -74,25 +165,7 @@ def _run_custom_job(
     deadline: float,
     profile_output: ArtifactOutput,
 ) -> dict[str, Any]:
-    custom = job["custom"]
-    flags = list(custom.get("flags", []))
-    if not any(flag == "-arch" or flag.startswith("-arch=") for flag in flags):
-        detected_arch = _detect_cuda_arch()
-        if detected_arch:
-            flags.append(f"-arch={detected_arch}")
-    compile_args = [
-        _which("nvcc"),
-        *_host_cxx_flags(),
-        *flags,
-        *custom["sources"],
-        "-o",
-        custom["output"],
-    ]
-    compile_result = _run_process(
-        compile_args,
-        workdir,
-        min(_remaining(deadline), 300.0),
-    )
+    compile_result = _compile_custom_job(workdir, job, deadline)
     if compile_result["timed_out"]:
         return _custom_result(
             "timeout",
@@ -110,9 +183,53 @@ def _run_custom_job(
             [],
             file_hashes,
         )
-    if custom["command"] == "compile":
+    if job["custom"]["command"] == "compile":
         return _custom_result("passed", compile_result, None, [], file_hashes)
+    return _run_compiled_custom_job(
+        workdir,
+        job,
+        file_hashes,
+        deadline,
+        profile_output,
+        compile_result,
+    )
 
+
+def _compile_custom_job(
+    workdir: Path,
+    job: dict[str, Any],
+    deadline: float,
+) -> dict[str, Any]:
+    custom = job["custom"]
+    flags = list(custom.get("flags", []))
+    if not any(flag == "-arch" or flag.startswith("-arch=") for flag in flags):
+        detected_arch = _detect_cuda_arch()
+        if detected_arch:
+            flags.append(f"-arch={detected_arch}")
+    compile_args = [
+        _which("nvcc"),
+        *_host_cxx_flags(),
+        *flags,
+        *custom["sources"],
+        "-o",
+        custom["output"],
+    ]
+    return _run_process(
+        compile_args,
+        workdir,
+        min(_remaining(deadline), 300.0),
+    )
+
+
+def _run_compiled_custom_job(
+    workdir: Path,
+    job: dict[str, Any],
+    file_hashes: dict[str, str],
+    deadline: float,
+    profile_output: ArtifactOutput,
+    compile_result: dict[str, Any],
+) -> dict[str, Any]:
+    custom = job["custom"]
     program = ["./" + custom["output"], *custom.get("program_args", [])]
     export_base = Path(custom.get("report_name") or "custom_profile").name
     if custom["command"] == "profile":
@@ -138,6 +255,20 @@ def _run_custom_job(
     elif run_result["returncode"] != 0:
         status = "error"
     return _custom_result(status, compile_result, run_result, profiles, file_hashes)
+
+
+def _custom_compile_identity(job: dict[str, Any], file_hashes: dict[str, str]) -> str:
+    custom = job["custom"]
+    identity = {
+        "files": file_hashes,
+        "sources": custom["sources"],
+        "flags": custom.get("flags", []),
+        "output": custom["output"],
+        "image": job.get("remote", {}).get("image"),
+        "gpu_type": job.get("remote", {}).get("gpu_type"),
+    }
+    encoded = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _custom_result(
@@ -247,7 +378,7 @@ def _make_workspace_writable(root: Path) -> None:
         if path.is_dir():
             path.chmod(0o755)
         elif path.is_file():
-            path.chmod(0o644)
+            path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
     root.chmod(0o755)
 
 

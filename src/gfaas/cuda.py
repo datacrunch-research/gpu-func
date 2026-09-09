@@ -10,11 +10,43 @@ from __future__ import annotations
 from typing import Any
 
 from . import cuda_runner
+from .artifacts import ArtifactOutput
 from .client import Client, RemoteResult
 from .errors import CudaCompilationError, CudaProcessError, GfaasError
 from .image import Image
+from .stages import CallStage, StageArtifactBinding
 
 CUDA_IMAGE = Image("cuda-nvcc")
+_COMPILED_OUTPUT = ArtifactOutput.directory(
+    "compiled-cuda",
+    "compiled-cuda",
+    kind="other",
+    publish_on_failure=False,
+)
+_COMPILED_ARTIFACT_ENV = "GFAAS_COMPILED_ARTIFACT_ID"
+
+
+def staged_execution_plan() -> tuple[CallStage, CallStage]:
+    """Return the compile and execute stages used by remote CUDA submissions."""
+    return (
+        CallStage(
+            name="compile",
+            qualname="compile_stage",
+            resources={"gpu": {"count": 0}},
+            outputs=(_COMPILED_OUTPUT,),
+        ),
+        CallStage(
+            name="execute",
+            qualname="execute_stage",
+            artifacts=(
+                StageArtifactBinding(
+                    from_stage="compile",
+                    output=_COMPILED_OUTPUT.name,
+                    env=_COMPILED_ARTIFACT_ENV,
+                ),
+            ),
+        ),
+    )
 
 
 def compile_and_run(
@@ -34,9 +66,10 @@ def compile_and_run(
     """Compile, run, and (optionally) ``ncu``-profile a CUDA source string.
 
     Returns ``{phase, stdout, stderr, returncode, compile_ms, run_ms, ncu_csv?}``.
-    Raises :class:`CudaCompilationError` when ``nvcc`` fails and
-    :class:`CudaProcessError` when the compiled program exits unsuccessfully.
-    Use :func:`spawn` and call ``wait()`` directly to inspect either raw result.
+    A staged compiler failure terminates the Call, so ``wait()`` raises
+    :class:`GfaasError`. An older single-stage service can still return a compile
+    report, which this function converts to :class:`CudaCompilationError`.
+    A failed compiled program raises :class:`CudaProcessError`.
     """
     report = spawn(
         source,
@@ -85,6 +118,7 @@ def spawn(
         gpu_type=gpu_type,
         timeout_s=timeout_s,
         app_name="cuda-nvcc",
+        stages=staged_execution_plan(),
     )
 
 

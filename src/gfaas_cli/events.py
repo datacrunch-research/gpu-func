@@ -43,6 +43,12 @@ def _human_event(event: dict[str, Any]) -> str | None:
     if event_type == "state":
         state = event.get("state") or attributes.get("state") or "unknown"
         parts = [f"state={state}"]
+        stage = attributes.get("stage")
+        if stage:
+            parts.append(f"stage={stage}")
+        stage_state = attributes.get("stage_state")
+        if stage_state:
+            parts.append(f"stage-state={stage_state}")
         worker_id = attributes.get("worker_id")
         if worker_id:
             parts.append(f"worker={worker_id}")

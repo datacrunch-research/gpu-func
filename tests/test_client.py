@@ -129,6 +129,24 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(sdk.submission["idempotency_key"], "request-1")
         self.assertEqual(sdk.submission["kwargs"]["workspace"].artifact_id, "art_workspace")
         self.assertEqual(sdk.submission["outputs"][0].name, "profiles")
+        self.assertEqual([stage.name for stage in sdk.submission["stages"]], ["compile", "execute"])
+        self.assertEqual(sdk.submission["stages"][0].resources, {"gpu": {"count": 0}})
+
+    def test_compile_only_submits_without_a_gpu_or_profile_output(self):
+        sdk = FakeSdkClient()
+        client = GfaasClient(sdk, poll_interval=0)
+        with tempfile.TemporaryDirectory() as temporary:
+            client.submit_job(
+                job={"target": {"kind": "custom"}, "command": {"mode": "custom-compile"}},
+                workspace=Path(temporary),
+                args=args(),
+                app_name="vfunc-custom",
+            )
+
+        self.assertEqual(sdk.submission["gpu_count"], 0)
+        self.assertEqual(sdk.submission["gpu_type"], "gb300")
+        self.assertEqual(sdk.submission["outputs"], ())
+        self.assertEqual(sdk.submission["stages"], ())
 
     def test_wait_resumes_events_by_cursor_and_fetches_result(self):
         sdk = FakeSdkClient()

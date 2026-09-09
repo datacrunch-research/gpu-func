@@ -5,9 +5,11 @@ from typing import Any
 
 import pytest
 
+from gfaas.artifacts import ArtifactOutput
 from gfaas.client import Client
 from gfaas.config import ClientConfig
 from gfaas.errors import GfaasError
+from gfaas.stages import CallStage, StageArtifactBinding
 
 
 def test_submit_packages_source_for_a_named_callable(
@@ -85,3 +87,68 @@ def test_submit_rejects_a_named_callable_with_the_wrong_source_module(
             )
     finally:
         client.close()
+
+
+def test_submit_serializes_one_logical_staged_call(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "pipeline.py"
+    source.write_text("def compile(): pass\ndef execute(): pass\n")
+    client = Client(
+        ClientConfig(
+            api_base="https://gpu.example.com/api",
+            api_key="secret",
+            poll_interval_s=0.01,
+            request_timeout_s=1,
+        )
+    )
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        client,
+        "upload_artifact",
+        lambda _data, **_kwargs: {"id": "art_source"},
+    )
+    monkeypatch.setattr(client, "create_environment", lambda _definition: {"id": "env_1"})
+    monkeypatch.setattr(client, "create_function", lambda _definition: {"id": "fn_1"})
+
+    def create_call(request: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        calls.append(request)
+        return {"id": "call_1"}
+
+    monkeypatch.setattr(client, "create_call", create_call)
+    output = ArtifactOutput("binary", "binary", kind="other")
+    try:
+        client.submit(
+            image="cuda-nvcc",
+            function=("pipeline", "execute"),
+            source_file=source,
+            gpu_count=1,
+            stages=(
+                CallStage(
+                    "compile",
+                    "compile",
+                    resources={"gpu": {"count": 0}},
+                    outputs=(output,),
+                ),
+                CallStage(
+                    "execute",
+                    "execute",
+                    artifacts=(StageArtifactBinding("compile", "binary", "BINARY_ID"),),
+                ),
+            ),
+        )
+    finally:
+        client.close()
+
+    assert calls[0]["function_id"] == "fn_1"
+    assert calls[0]["stages"] == [
+        {
+            "name": "compile",
+            "executable": {"module": "pipeline", "qualname": "compile"},
+            "resources": {"gpu": {"count": 0}},
+            "outputs": [output.request()],
+        },
+        {
+            "name": "execute",
+            "executable": {"module": "pipeline", "qualname": "execute"},
+            "artifacts": [{"from_stage": "compile", "output": "binary", "env": "BINARY_ID"}],
+        },
+    ]
