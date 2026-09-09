@@ -102,5 +102,5 @@ jobs:
         run: |
           python -m venv "${RUNNER_TEMP}/package-check"
           "${RUNNER_TEMP}/package-check/bin/pip" install --disable-pip-version-check dist/*.whl
-          "${RUNNER_TEMP}/package-check/bin/python" -c "import gfaas"
-          "${RUNNER_TEMP}/package-check/bin/vfunc" --help
+          "${RUNNER_TEMP}/package-check/bin/python" -m pip check
+          "${RUNNER_TEMP}/package-check/bin/python" -I tests/check_installed_wheel.py
