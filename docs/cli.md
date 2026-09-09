@@ -200,6 +200,34 @@ uv run vfunc run kernel.cu \
 The `.cu` suffix selects the CUDA runner and the `cuda-nvcc` image. The arguments after `--` go to
 the compiled program.
 
+The service operates one Call with a `compile` stage and an `execute` stage. The compile stage holds
+no GPU lease. After compilation, the service publishes the executable as an internal Artifact.
+
+The execute stage then waits for the requested GPU capacity. `vfunc call show` reports the active
+stage and its resource envelope. The Call does not compile the source again during placement retry.
+
+If compilation fails, the Call fails before it requests a GPU. Use `vfunc call logs` to read the
+compiler output.
+
+`vfunc custom run` and `vfunc custom profile` use the same two-stage lifecycle for multi-file CUDA
+workspaces. `vfunc custom compile` and the course `compile` action request no GPU.
+
+Other course actions invoke the exercise's `run.py` command as one opaque GPU stage. The service
+cannot separate compilation from execution until that external runner provides a compiled Artifact
+boundary.
+
+Operators can retain an overlap and throughput measurement from a quiet test pool:
+
+```bash
+python examples/staged_cuda_benchmark.py \
+  --gpu-type gb300 \
+  --output .local/vfunc/staged-cuda-benchmark.json
+```
+
+The harness first proves that compilation overlaps an existing GPU execution. It then compares the
+old full-reservation behavior with staged Calls. The report includes throughput and GPU lease
+occupancy. It does not treat lease occupancy as hardware activity measured by NVIDIA counters.
+
 The remote `run` command has no `--arch` option. Use a compiler flag to select an explicit target:
 
 ```bash

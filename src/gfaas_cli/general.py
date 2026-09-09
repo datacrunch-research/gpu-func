@@ -21,6 +21,7 @@ from argcomplete.completers import FilesCompleter
 from gfaas import cuda_runner, local_cuda, python_runner
 from gfaas.artifacts import ArtifactOutput
 from gfaas.client import Client, RemoteResult
+from gfaas.cuda import staged_execution_plan
 
 from .errors import CliError
 from .events import show_event
@@ -273,6 +274,7 @@ def _submit_run(
                 "program_args": program_args,
             },
             app_name="cuda-nvcc",
+            stages=staged_execution_plan(),
             **options,
         )
         return remote, runtime

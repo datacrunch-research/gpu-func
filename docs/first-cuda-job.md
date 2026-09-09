@@ -20,6 +20,9 @@ vfunc run examples/cli/hello_cuda.cu --gpu-type "$GFAAS_GPU_TYPE"
 The command reports the Call ID and its state changes. It also shows the compiler and program
 output. The selected worker can change between Calls.
 
+The remote Call has separate `compile` and `execute` stages. Compilation does not hold a GPU lease.
+The execute stage starts only after the service publishes the compiled Artifact and reserves a GPU.
+
 Use `--json` when another program consumes the result:
 
 ```bash
@@ -92,8 +95,10 @@ CUDA program to iterate.
 
 ## Inspect the job
 
-`job.status()` returns the current lifecycle state. After assignment, the Attempt records the
-selected worker. The terminal state event contains the request journey in its `attributes` object.
+`job.status()` returns the current lifecycle state. The `current_stage` object identifies the active
+stage and its resources. After assignment, the Attempt records the selected worker.
+
+The terminal state event contains the request journey in its `attributes` object.
 
 Use `job.call_id` as the stable Call identity. `job.job_id` remains available for compatibility with
 older client code.

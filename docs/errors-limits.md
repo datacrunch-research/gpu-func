@@ -6,7 +6,7 @@
 | ------------------------- | ----------------------------------------------------------- |
 | `GfaasError`              | An API request fails, or a Call ends in a non-success state |
 | `ArtifactTreeUploadError` | Tree creation fails after one or more child uploads         |
-| `CudaCompilationError`    | `nvcc` rejects the CUDA source                              |
+| `CudaCompilationError`    | A single-stage CUDA helper returns a compile error report   |
 | `CudaProcessError`        | The compiled program or profiler exits unsuccessfully       |
 | `SerializationError`      | The SDK cannot serialize the arguments or result            |
 | `TimeoutError`            | The local `wait()` reaches its deadline                     |
@@ -14,8 +14,11 @@
 CUDA exceptions keep the full report as `.report`. They also expose `.stdout`, `.stderr`,
 `.returncode`, `.compile_ms`, and `.run_ms`.
 
-CAUTION: A CUDA compile or process failure does not fail the Call. The CUDA harness ran and returned
-diagnostics, so the Call ends `succeeded`. Read the report to find the failure.
+Remote staged CUDA compilation fails the Call before GPU assignment. `wait()` raises `GfaasError`
+for this terminal state. Read the retained Call logs to get the complete compiler output.
+
+The compiled program returns a process report from the GPU stage. `compile_and_run()` converts an
+unsuccessful process report to `CudaProcessError`.
 
 `TimeoutError` only stops the local wait. It does not cancel the remote Call. Keep the
 `RemoteResult`, then read its status or request cancellation.
@@ -28,7 +31,7 @@ except TimeoutError:
     call.cancel(reason="client deadline")
 ```
 
-If one handler processes compilation and process errors, catch `CudaError`:
+If one handler processes CUDA report errors, catch `CudaError`:
 
 ```python
 import gfaas

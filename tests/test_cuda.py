@@ -89,6 +89,7 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
     assert result == fake_result
     assert len(client.calls) == 1
     call = client.calls[0]
+    stages = call.pop("stages")
     assert call == {
         "image": gfaas.Image("cuda-nvcc"),
         "function": cuda_runner.run,
@@ -105,6 +106,11 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
         "timeout_s": 900,
         "app_name": "cuda-nvcc",
     }
+    assert [stage.name for stage in stages] == ["compile", "execute"]
+    assert stages[0].resources == {"gpu": {"count": 0}}
+    assert stages[0].outputs[0].name == "compiled-cuda"
+    assert stages[1].artifacts[0].from_stage == "compile"
+    assert stages[1].artifacts[0].output == "compiled-cuda"
     assert "sm__throughput" in result["ncu_csv"]
     assert "__global__ void add" in call["kwargs"]["source"]
 
@@ -361,3 +367,106 @@ def test_cuda_runner_which_checks_common_cuda_locations(monkeypatch):
     monkeypatch.setattr(cuda_runner.os, "access", fake_access)
 
     assert cuda_runner._which("nvcc") == "/usr/local/cuda/bin/nvcc"
+
+
+def test_cuda_compile_stage_publishes_executable_manifest_without_running_gpu_code(
+    monkeypatch, tmp_path: Path
+) -> None:
+    output_root = tmp_path / "outputs"
+    output_root.mkdir()
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    binary = build_root / "kernel"
+    binary.write_bytes(b"executable")
+    report = {
+        "phase": "compile",
+        "stdout": "compiled\n",
+        "stderr": "",
+        "returncode": 0,
+        "compile_ms": 17,
+        "run_ms": 0,
+        "ncu_csv": None,
+    }
+    monkeypatch.setenv("GFAAS_OUTPUT_ROOT", str(output_root))
+    monkeypatch.setattr(
+        cuda_runner,
+        "_compile_program",
+        lambda _source, _flags: (str(build_root), str(binary), report, {}),
+    )
+    monkeypatch.setattr(cuda_runner, "_which", lambda _command: "/cuda/bin/nvcc")
+    monkeypatch.setattr(cuda_runner, "_compiler_identity", lambda _nvcc, _env: "nvcc 13")
+
+    assert cuda_runner.compile_stage(source="int main(){}", nvcc_flags=["-O3"]) == report
+
+    published = output_root / "compiled-cuda"
+    assert (published / "kernel").read_bytes() == b"executable"
+    manifest = __import__("json").loads((published / "manifest.json").read_text())
+    assert manifest["schema"] == "vfunc.cuda-compiled/v1"
+    assert manifest["nvcc_flags"] == ["-O3"]
+    assert manifest["build_image"] == {"name": None, "digest": None}
+    assert manifest["platform"]["machine"]
+    assert manifest["compile"]["compile_ms"] == 17
+
+
+def test_cuda_execute_stage_uses_only_the_staged_compiled_artifact(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import hashlib
+    import json
+    import platform
+
+    source = "int main(){}"
+    artifact_root = tmp_path / "artifacts"
+    compiled = artifact_root / "art_compiled"
+    compiled.mkdir(parents=True)
+    (compiled / "kernel").write_bytes(b"executable")
+    compile_report = {
+        "phase": "compile",
+        "stdout": "",
+        "stderr": "",
+        "returncode": 0,
+        "compile_ms": 11,
+        "run_ms": 0,
+        "ncu_csv": None,
+    }
+    (compiled / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema": "vfunc.cuda-compiled/v1",
+                "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+                "nvcc_flags": ["-O3"],
+                "compiler": "nvcc 13",
+                "target_gpu_pool": None,
+                "build_image": {"name": None, "digest": None},
+                "platform": {
+                    "machine": platform.machine(),
+                    "system": platform.system(),
+                    "libc": list(platform.libc_ver()),
+                },
+                "compile": compile_report,
+            }
+        )
+    )
+    monkeypatch.setenv("GFAAS_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setenv("GFAAS_COMPILED_ARTIFACT_ID", "art_compiled")
+    monkeypatch.setattr(cuda_runner, "_workdir_root", lambda: str(tmp_path))
+    execution: dict[str, Any] = {}
+
+    def execute(binary_path, _workdir, _env, compiled_report, **kwargs):
+        execution["binary"] = binary_path
+        execution["report"] = compiled_report
+        execution["kwargs"] = kwargs
+        return {"phase": "run", "returncode": 0}
+
+    monkeypatch.setattr(cuda_runner, "_execute_program", execute)
+
+    result = cuda_runner.execute_stage(
+        source=source,
+        nvcc_flags=["-O3"],
+        program_args=["--iters", "2"],
+    )
+
+    assert result == {"phase": "run", "returncode": 0}
+    assert execution["binary"] == str(compiled / "kernel")
+    assert execution["report"] == compile_report
+    assert execution["kwargs"]["program_args"] == ["--iters", "2"]

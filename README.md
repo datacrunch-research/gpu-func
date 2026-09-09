@@ -69,6 +69,9 @@ vfunc run experiment.py --gpu-type gb300
 vfunc run kernel.cu --gpu-type gb300 -- --problem-size 4096
 ```
 
+Remote CUDA Calls use two durable stages. The compile stage uses CPU and memory, but it holds no GPU
+lease. The execution stage requests the GPU after the compiled Artifact is durable.
+
 The [Nemotron LoRA guide](docs/fine-tuning-nemotron.md) covers bounded
 fine-tuning Calls, checkpoints, resume, and adapter download.
 
@@ -106,6 +109,10 @@ vfunc custom run kernel.cu
 vfunc custom run kernel.cu --harness harness.cu --gpu-type gb300
 vfunc custom profile kernel.cu --artifact-dir ./profiles
 ```
+
+The `run` and `profile` commands compile without a GPU lease. They publish the prepared workspace
+as an internal Artifact. The GPU stage starts after the Artifact is durable and a GPU is reserved.
+The `compile` command requests no GPU.
 
 The worker detects its CUDA architecture by default. Use `--arch` only when the
 source needs an explicit compilation target.

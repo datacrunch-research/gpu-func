@@ -35,6 +35,7 @@ from .config import ClientConfig
 from .errors import ArtifactTreeUploadError, GfaasError, UnsupportedGpuPoolError
 from .image import Image
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result, encode_args
+from .stages import CallStage
 
 TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
 MAX_ERROR_JOURNEY_EVENTS = 40
@@ -743,6 +744,7 @@ class Client:
         source_file: Path | str | None = None,
         idempotency_key: str | None = None,
         outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = (),
+        stages: tuple[CallStage, ...] = (),
     ) -> RemoteResult:
         """Package a Python callable and create an asynchronous Call."""
         image_name = _image_name(image)
@@ -831,6 +833,8 @@ class Client:
             call_request["capacity_wait_seconds"] = capacity_wait_s
         if outputs:
             call_request["outputs"] = [output.request() for output in outputs]
+        if stages:
+            call_request["stages"] = [stage.request(default_module=module_name) for stage in stages]
         artifact_ids = collect_artifact_ids(args, kwargs)
         if artifact_ids:
             call_request["artifacts"] = [
@@ -1089,7 +1093,7 @@ def _gpu_request(
         if isinstance(gpu_count, bool) or not isinstance(gpu_count, int) or gpu_count < 0:
             raise GfaasError("gpu_count must be a non-negative integer")
         explicit_request: dict[str, Any] = {"count": gpu_count}
-        if gpu_count > 0 and gpu_type != "any":
+        if gpu_type != "any":
             explicit_request["models"] = [gpu_type]
         return explicit_request
     if gpu is None:
