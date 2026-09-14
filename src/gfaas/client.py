@@ -447,6 +447,37 @@ class Client:
             operation="artifact lookup",
         ).json()
 
+    def list_artifacts(
+        self,
+        *,
+        after: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Return one page of owner-scoped Artifact metadata.
+
+        Pass the ``next_cursor`` from a page as ``after`` to request the next one, or use
+        :meth:`iter_artifacts` to walk every page.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if after is not None:
+            params["after"] = after
+        return self._request(
+            "GET",
+            "/v1/artifacts",
+            operation="artifact listing",
+            params=params,
+        ).json()
+
+    def iter_artifacts(self, *, limit: int = 100) -> Iterator[dict[str, Any]]:
+        """Yield every owner-scoped Artifact, following the cursor across pages."""
+        cursor: str | None = None
+        while True:
+            page = self.list_artifacts(after=cursor, limit=limit)
+            yield from page.get("items", [])
+            cursor = page.get("next_cursor")
+            if not cursor:
+                return
+
     def download_artifact(self, artifact_id: str) -> tuple[bytes, str]:
         response = self._request(
             "GET",
