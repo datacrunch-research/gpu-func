@@ -60,4 +60,5 @@ objects into a cache.
 Before it stores an object, the file server makes sure that its digest matches. Your function never
 receives object-storage credentials.
 
-Operators publish remote images and add approved descriptors to the catalog.
+Operators can publish shared catalog images. Producers can also publish private images and qualify
+an immutable digest through a normal Call. See [Qualify a published image](qualification.md).
