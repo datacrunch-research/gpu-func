@@ -89,6 +89,57 @@ def test_submit_rejects_a_named_callable_with_the_wrong_source_module(
         client.close()
 
 
+def test_submit_pins_and_marks_an_image_qualification_call(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "qualification.py"
+    source.write_text("def check():\n    return True\n")
+    client = Client(
+        ClientConfig(
+            api_base="https://gpu.example.com/api",
+            api_key="secret",
+            poll_interval_s=0.01,
+            request_timeout_s=1,
+        )
+    )
+    environments: list[dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        client,
+        "upload_artifact",
+        lambda _data, **_kwargs: {"id": "art_source"},
+    )
+
+    def create_environment(definition: dict[str, Any]) -> dict[str, Any]:
+        environments.append(definition)
+        return {"id": "env_1"}
+
+    monkeypatch.setattr(client, "create_environment", create_environment)
+    monkeypatch.setattr(client, "create_function", lambda _definition: {"id": "fn_1"})
+
+    def create_call(request: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
+        calls.append(request)
+        return {"id": "call_1"}
+
+    monkeypatch.setattr(client, "create_call", create_call)
+    digest = f"sha256:{'a' * 64}"
+    try:
+        result = client.submit(
+            image="candidate",
+            function=("qualification", "check"),
+            source_file=source,
+            qualification_image_digest=digest,
+        )
+    finally:
+        client.close()
+
+    assert result.call_id == "call_1"
+    assert environments[0]["name"] == "candidate"
+    assert environments[0]["source"] == {
+        "kind": "registered_image",
+        "name": digest,
+    }
+    assert calls[0]["qualification"] == {"image_digest": digest}
+
+
 def test_submit_serializes_one_logical_staged_call(monkeypatch, tmp_path: Path) -> None:
     source = tmp_path / "pipeline.py"
     source.write_text("def compile(): pass\ndef execute(): pass\n")

@@ -774,6 +774,7 @@ class Client:
         env: dict[str, str] | None = None,
         source_file: Path | str | None = None,
         idempotency_key: str | None = None,
+        qualification_image_digest: str | None = None,
         outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = (),
         stages: tuple[CallStage, ...] = (),
     ) -> RemoteResult:
@@ -783,6 +784,19 @@ class Client:
             raise GfaasError(
                 "container build images are not enabled by the current gfaas service; "
                 "use a registered image"
+            )
+        if qualification_image_digest is not None and not re.fullmatch(
+            r"sha256:[0-9a-f]{64}", qualification_image_digest
+        ):
+            raise GfaasError("qualification_image_digest must be a lowercase SHA-256 digest")
+        remote_source = _image_remote_source(image)
+        if (
+            qualification_image_digest is not None
+            and remote_source is not None
+            and remote_source.get("image_digest") != qualification_image_digest
+        ):
+            raise GfaasError(
+                "qualification_image_digest does not match the Image remote descriptor"
             )
         gpu_request = _gpu_request(gpu, gpu_count, gpu_type)
         kwargs = dict(kwargs or {})
@@ -817,9 +831,8 @@ class Client:
         )
         environment_source: dict[str, Any] = {
             "kind": "registered_image",
-            "name": image_name,
+            "name": qualification_image_digest or image_name,
         }
-        remote_source = _image_remote_source(image)
         if remote_source is not None:
             environment_source["remote"] = remote_source
         environment = self.create_environment(
@@ -860,6 +873,8 @@ class Client:
         )
 
         call_request: dict[str, Any] = {"function_id": function_resource["id"]}
+        if qualification_image_digest is not None:
+            call_request["qualification"] = {"image_digest": qualification_image_digest}
         if capacity_wait_s is not None:
             call_request["capacity_wait_seconds"] = capacity_wait_s
         if outputs:
