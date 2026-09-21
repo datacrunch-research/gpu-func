@@ -68,6 +68,19 @@ class Function:
         return image
 
     def spawn(self, *args: Any, **kwargs: Any) -> RemoteResult:
+        return self._spawn(args, kwargs, qualification_image_digest=None)
+
+    def qualify(self, image_digest: str, *args: Any, **kwargs: Any) -> RemoteResult:
+        """Run this Function as the qualification Call for an immutable image digest."""
+        return self._spawn(args, kwargs, qualification_image_digest=image_digest)
+
+    def _spawn(
+        self,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        *,
+        qualification_image_digest: str | None,
+    ) -> RemoteResult:
         return self.app.client.submit(
             image=self._resolve_image(),
             function=self.handler,
@@ -88,6 +101,7 @@ class Function:
             env=self.env,
             source_file=self.source_file,
             outputs=self.outputs,
+            qualification_image_digest=qualification_image_digest,
         )
 
     def remote(self, *args: Any, **kwargs: Any) -> Any:
