@@ -31,9 +31,13 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "Image",
         "RemoteResult",
         "StageArtifactBinding",
+        "TritonCandidate",
+        "TritonCase",
         "UnsupportedGpuPoolError",
         "compile_and_run",
         "scratch_path",
+        "spawn_triton_tuning",
+        "tune_triton",
     }
 
     assert set(gfaas.__all__) == expected

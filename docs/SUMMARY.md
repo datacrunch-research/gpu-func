@@ -4,6 +4,7 @@
 - [Install and authenticate](install.md)
 - [Command-line interface](cli.md)
   - [CUDA development workflows](cuda-workflows.md)
+  - [Triton candidate tuning](triton-tuning.md)
 - [First CUDA job](first-cuda-job.md)
 - [Python functions](python-functions.md)
 - [Images](images/index.md)
