@@ -43,8 +43,12 @@ __all__ = [
     "Image",
     "RemoteResult",
     "StageArtifactBinding",
+    "TritonCandidate",
+    "TritonCase",
     "UnsupportedGpuPoolError",
     "compile_and_run",
+    "spawn_triton_tuning",
+    "tune_triton",
 ]
 
 
@@ -61,4 +65,18 @@ def __getattr__(name: str):
         from .cuda import CudaSource, compile_and_run
 
         return {"CudaSource": CudaSource, "compile_and_run": compile_and_run}[name]
+    if name in {"TritonCandidate", "TritonCase", "spawn_triton_tuning", "tune_triton"}:
+        from .triton_tuning import (
+            TritonCandidate,
+            TritonCase,
+            spawn_triton_tuning,
+            tune_triton,
+        )
+
+        return {
+            "TritonCandidate": TritonCandidate,
+            "TritonCase": TritonCase,
+            "spawn_triton_tuning": spawn_triton_tuning,
+            "tune_triton": tune_triton,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
