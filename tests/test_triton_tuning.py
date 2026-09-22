@@ -12,6 +12,7 @@ import pytest
 
 from gfaas import TritonCandidate, TritonCase, spawn_triton_tuning
 from gfaas import triton_tuning_runner as runner
+from gfaas.client import _gpu_request
 
 
 class FakeClient:
@@ -32,7 +33,7 @@ def _request(client: FakeClient) -> object:
         cases=[TritonCase("n=64", {"n": 64})],
         target_arch=103,
         image="triton-runtime",
-        gpu="GB300",
+        gpu="gb300",
         client=client,  # type: ignore[arg-type]
     )
 
@@ -43,6 +44,11 @@ def test_tuning_submits_one_call_with_cpu_compile_and_one_gpu_stage() -> None:
     assert result is not None
     submission = client.submission
     assert submission["gpu_count"] == 1
+    assert submission["gpu_type"] == "gb300"
+    assert _gpu_request(submission.get("gpu"), submission["gpu_count"], submission["gpu_type"]) == {
+        "count": 1,
+        "models": ["gb300"],
+    }
     assert submission["kwargs"]["triton_version"] == "3.6.0"
     stages = submission["stages"]
     assert [stage.name for stage in stages] == ["compile", "tune"]
