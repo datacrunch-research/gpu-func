@@ -8,7 +8,8 @@ them in sequence. The service cleans up the transient Artifact through its norma
 The helper requires Triton 3.6.0 on both stages. The workload image also needs PyTorch with CUDA
 support. The client machine does not need either package. Supply an image qualified for the requested
 GPU, and pass its CUDA SM as `target_arch` (for example, `103` for SM 10.3). The GPU stage rejects a
-different device architecture or Triton version.
+different device architecture or Triton version. Pass the pool name as `gpu`, for example `gb300`;
+the helper requests one GPU from that pool.
 
 See [the complete vector-add example](../examples/triton_tuning.py). Run it with a registered image
 that has those packages:

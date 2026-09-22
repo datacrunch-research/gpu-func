@@ -144,8 +144,8 @@ def spawn_triton_tuning(
             "trials": trials,
             "max_adaptive_candidates": max_adaptive_candidates,
         },
-        gpu=gpu,
         gpu_count=1,
+        gpu_type=gpu,
         timeout_s=timeout_s,
         app_name="triton-autotune",
         stages=staged_tuning_plan(
