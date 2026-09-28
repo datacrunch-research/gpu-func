@@ -1057,7 +1057,10 @@ def test_call_follower_prints_preparation_progress_and_logs(capsys) -> None:
     example.follow_call(Job(), timeout_s=30, capacity_wait_s=20)
 
     captured = capsys.readouterr()
-    assert "phase=artifact_staged files=4 bytes=4096 worker=worker-a" in captured.out
+    assert (
+        "phase=artifact_staged files=4 bytes=4096 downloaded=0 uploaded=0 worker=worker-a"
+        in captured.out
+    )
     assert "training" in captured.out
     assert "generation=1 artifact=art_checkpoint durable=true" in captured.out
     assert "warning" in captured.err

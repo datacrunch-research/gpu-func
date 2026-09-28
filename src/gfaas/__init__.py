@@ -22,6 +22,7 @@ from .errors import (
     UnsupportedGpuPoolError,
 )
 from .image import Image
+from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "ArtifactTreeUploadError",
     "ArtifactUploadProgress",
     "Client",
+    "call_status_summary",
     "ClientConfig",
     "CallStage",
     "CudaCompilationError",

@@ -739,7 +739,12 @@ The coordinator offers the Call to a compatible GPU pool. A worker can reject
 the offer when GPUs or other resources are busy.
 
 While a Call waits, `vfunc` shows capacity events. After placement, the
-worker resolves the image and stages the source, input, and workspace Artifacts.
+subscriber resolves the image and stages the source, input, and workspace Artifacts.
+
+Call status includes `preparation` during this work. It reports the worker, placement generation,
+phase, completed content, and transfer counters. Large transfers report byte movement before a file completes.
+After 30 seconds without a report, preparation becomes `stalled`. This means that progress is unconfirmed.
+The capacity-wait deadline still applies. `gfaas.call_status_summary(job.status())` formats these fields.
 
 ### Execution
 

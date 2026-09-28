@@ -34,6 +34,7 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "TritonCandidate",
         "TritonCase",
         "UnsupportedGpuPoolError",
+        "call_status_summary",
         "compile_and_run",
         "scratch_path",
         "spawn_triton_tuning",

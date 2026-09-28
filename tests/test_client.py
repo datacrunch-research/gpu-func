@@ -160,6 +160,28 @@ class ClientTests(unittest.TestCase):
         self.assertIn("state=queued", stderr.getvalue())
         self.assertIn("state=succeeded", stderr.getvalue())
 
+    def test_wait_reports_current_preparation_from_status(self):
+        sdk = FakeSdkClient()
+        sdk.get_call = lambda call_id: {
+            "id": call_id,
+            "state": "queued",
+            "preparation": {
+                "status": "stalled",
+                "phase": "transferring",
+                "worker_id": "worker-1",
+                "placement_generation": 1,
+                "downloaded_bytes": 65536,
+                "idle_ms": 31000,
+            },
+        }
+        client = GfaasClient(sdk, poll_interval=0)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            client.wait_for_result(sdk.remote, timeout_s=1)
+        self.assertIn("state=queued preparation=stalled phase=transferring", stderr.getvalue())
+        self.assertIn("downloaded=65536", stderr.getvalue())
+        self.assertIn("progress-idle=31s", stderr.getvalue())
+
     def test_profile_download_refuses_to_replace_existing_file(self):
         sdk = FakeSdkClient()
         client = GfaasClient(sdk, poll_interval=0)

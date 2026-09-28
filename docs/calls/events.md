@@ -55,7 +55,16 @@ State events expose `state` at the top level. Output events expose `stream_data`
 
 A `preparation` event reports work before worker acceptance. Its `attributes` contain `phase`,
 `completed_files`, and `completed_bytes`. The phase can report image resolution, bundle upload,
-Artifact staging, Artifact reuse, or preparation completion.
+Artifact staging, Artifact reuse, transfer progress, or preparation completion.
+
+Updated subscribers report changing transfer counters at most once every two seconds.
+The report can arrive before the first file completes.
+The event includes `worker_id`, `placement_generation`, `reporter_id`, and a reporter `sequence`.
+`downloaded_bytes` and `uploaded_bytes` measure transport within that reporter lifetime.
+`total_files`, `total_bytes`, and `totals_complete` describe known attached Artifact content.
+
+Retained events describe past observations. [Current Call status](index.md#preparation-before-assignment) reports the current preparation and its freshness.
+After reconnect, clients can read status without reconstructing it from all previous events.
 
 The event type `retention.truncated` means that the worker discarded output after the configured log
 limit.
