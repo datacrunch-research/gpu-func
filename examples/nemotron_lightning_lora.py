@@ -1940,6 +1940,8 @@ def follow_call(
                     f" phase={phase}"
                     f" files={attributes.get('completed_files', 0)}"
                     f" bytes={attributes.get('completed_bytes', 0)}"
+                    f" downloaded={attributes.get('downloaded_bytes', 0)}"
+                    f" uploaded={attributes.get('uploaded_bytes', 0)}"
                     f" worker={attributes.get('worker_id', 'unknown')}",
                     flush=True,
                 )
@@ -1953,12 +1955,12 @@ def follow_call(
                     f"call {job.call_id} event stream exceeded {timeout_s}s"
                 ) from None
             try:
-                call_state = job.status().get("state", "unknown")
+                call_summary = gfaas.call_status_summary(job.status())
             except Exception:
-                call_state = "unknown"
+                call_summary = "state=unknown"
             print(
                 "[nemotron-lora] still waiting"
-                f" state={call_state}"
+                f" {call_summary}"
                 f" last={last_event}"
                 f" idle={int(now - last_event_at)}s"
                 f" elapsed={int(now - started_at)}s",

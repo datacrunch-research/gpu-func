@@ -18,6 +18,7 @@ from gfaas import (
     ClientConfig,
     RemoteResult,
     StageArtifactBinding,
+    call_status_summary,
 )
 from gfaas.errors import GfaasError
 
@@ -187,6 +188,7 @@ class GfaasClient:
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         cursor: str | None = None
         terminal = False
+        last_status_at = float("-inf")
         try:
             while not terminal:
                 page = self._client.list_events(remote.call_id, after=cursor, limit=1000)
@@ -206,7 +208,11 @@ class GfaasClient:
                 if call.get("state") in _TERMINAL_CALL_STATES:
                     terminal = True
                     break
-                if deadline is not None and time.monotonic() >= deadline:
+                now = time.monotonic()
+                if not json_events and now - last_status_at >= 10:
+                    print(f"[vfunc] {call_status_summary(call)}", file=sys.stderr)
+                    last_status_at = now
+                if deadline is not None and now >= deadline:
                     raise TimeoutError(f"Call {remote.call_id} did not finish within {timeout_s}s")
                 time.sleep(self.poll_interval)
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())

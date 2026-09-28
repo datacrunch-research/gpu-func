@@ -69,6 +69,15 @@ def _human_event(event: dict[str, Any]) -> str | None:
             parts.append(f"worker={attributes['worker_id']}")
         parts.append(f"files={attributes.get('completed_files', 0)}")
         parts.append(f"bytes={_format_bytes(attributes.get('completed_bytes', 0))}")
+        for name in ("downloaded_bytes", "uploaded_bytes"):
+            if name in attributes:
+                parts.append(f"{name.removesuffix('_bytes')}={_format_bytes(attributes[name])}")
+        if "placement_generation" in attributes:
+            parts.append(f"generation={attributes['placement_generation']}")
+        if attributes.get("total_files") is not None:
+            label = "total" if attributes.get("totals_complete") else "known"
+            parts.append(f"{label}-files={attributes['total_files']}")
+            parts.append(f"{label}-bytes={_format_bytes(attributes.get('total_bytes', 0))}")
         details = attributes.get("details")
         if isinstance(details, dict):
             for name in ("image_name", "image_id", "artifact_id"):
