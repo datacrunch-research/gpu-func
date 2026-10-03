@@ -364,7 +364,7 @@ class TritonKernel:
             "quick_benchmark_delta": policy.quick_benchmark_delta,
             "pruning_min_runtime_us": policy.pruning_min_runtime_us,
             "evaluation_enabled": policy.evaluate is not None,
-            "timing_method": "CUDA events: 5-trial pilot, then 10 ms mean when at least 10 iterations; 100 preflushes per stage",
+            "timing_method": "CUDA events: 5-trial pilot, then 10 ms minimum when at least 10 iterations; 100 preflushes per stage",
             "shards": shards,
         }
 

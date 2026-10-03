@@ -242,7 +242,7 @@ single-launch CUDA event trials, each followed by an L2 flush. Synchronize once
 and take the fastest pilot trial. Compute `ceil(10_000 / pilot_us)` iterations
 to cover 10 ms of kernel time. If fewer than ten iterations are needed, return
 the pilot minimum. Otherwise enqueue another 100 flushes and repeat the event
-loop for that iteration count, returning its mean after one final synchronization.
+loop for that iteration count, returning its minimum after one final synchronization.
 Flushes zero a buffer twice the reported L2 cache size, outside the timed interval.
 Reports retain both stages' timings and the refinement iteration count.
 

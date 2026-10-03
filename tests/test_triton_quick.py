@@ -215,9 +215,9 @@ def test_quick_timing_order_flush_and_fastest_of_five():
     assert trials["refinement_iterations"] == 0
 
 
-def test_quick_refinement_uses_ten_ms_iteration_count_and_mean():
+def test_quick_refinement_uses_ten_ms_iteration_count_and_minimum():
     log = []
-    durations = iter([1, 2, 3, 4, 5] + [2] * 10)
+    durations = iter([1, 2, 3, 4, 5] + [2] * 9 + [0.5])
 
     class Event:
         def __init__(self, **kwargs):
@@ -240,9 +240,9 @@ def test_quick_refinement_uses_ten_ms_iteration_count_and_mean():
         SimpleNamespace(zero_=lambda: log.append("flush")),
         torch,
     )
-    assert result["runtime_us"] == 2000
+    assert result["runtime_us"] == 500
     assert result["refinement_iterations"] == 10
     assert result["pilot_trial_us"] == [1000, 2000, 3000, 4000, 5000]
-    assert result["trial_us"] == [2000] * 10
+    assert result["trial_us"] == [2000] * 9 + [500]
     assert log.count("flush") == 100 + 5 + 100 + 10
     assert log.count("sync") == 4

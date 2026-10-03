@@ -165,7 +165,7 @@ def measure_quick(
     refined = iterations >= 10
     final = trials(iterations) if refined else pilot
     return {
-        "runtime_us": sum(final) / len(final) if refined else fastest,
+        "runtime_us": min(final) if refined else fastest,
         "pilot_trial_us": pilot,
         "trial_us": final,
         "refinement_iterations": iterations if refined else 0,
@@ -296,7 +296,7 @@ def quick_benchmark(
         "quick_benchmark_delta": delta,
         "pruning_min_runtime_us": minimum_us,
         "evaluation_enabled": evaluate is not None,
-        "timing_method": "CUDA events: 5-trial pilot, then 10 ms mean when at least 10 iterations; 100 preflushes per stage",
+        "timing_method": "CUDA events: 5-trial pilot, then 10 ms minimum when at least 10 iterations; 100 preflushes per stage",
         "benchmark_input_loads": 1,
         "l2_flush_bytes": flush.numel() * flush.element_size(),
     }
