@@ -183,7 +183,7 @@ kernel = vfunc.TritonKernel(
     make_inputs=make_inputs,
     reset_inputs=reset_inputs,
     tuning=vfunc.TritonTuning(
-        refined_pruning=vfunc.TritonPruning(relative_delta=0.10, absolute_us=1.0),
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
         evaluate=evaluate,
     ),
 )
@@ -250,8 +250,8 @@ kernel = vfunc.TritonKernel(
     make_inputs=make_inputs,
     reset_inputs=reset_inputs,
     tuning=vfunc.TritonTuning(
-        pilot_pruning=vfunc.TritonPruning(relative_delta=1.0, absolute_us=1.0),
-        refined_pruning=vfunc.TritonPruning(relative_delta=0.10, absolute_us=1.0),
+        pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
         evaluate=evaluate,
         replication_factor=3,
     ),
@@ -262,6 +262,13 @@ print(report["benchmark"]["best_configuration"])
 ```
 
 Each round retains times <= `best + max(relative_delta * best, absolute_us)`.
+Defaults allow 25% or 1 us in the five-trial pilot, then 5% or 0.1 us in
+refinement and global replica reduction, whichever allowance is larger. The
+pilot leaves more room for noisy early measurements. The smaller refined
+absolute allowance avoids replicating almost every configuration of a short
+kernel. These are heuristic starting points tested on GB300; increase either
+allowance for noisier workloads or use an unpruned control to check selection
+quality. Replication still defaults to three distinct GPUs.
 Set either pruning policy to `None` to disable that round's pruning while still
 measuring it. The old percentage-only delta and runtime-exemption options are
 replaced by these independent policies.

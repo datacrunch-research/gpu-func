@@ -14,8 +14,8 @@ from typing import Any
 class TritonPruning:
     """Retain timings <= best + max(relative_delta * best, absolute_us)."""
 
-    relative_delta: float = 0.10
-    absolute_us: float = 1.0
+    relative_delta: float = 0.05
+    absolute_us: float = 0.1
 
     def __post_init__(self) -> None:
         for name in ("relative_delta", "absolute_us"):
@@ -29,7 +29,7 @@ class TritonPruning:
 
 @dataclass(frozen=True)
 class TritonTuning:
-    pilot_pruning: TritonPruning | None = TritonPruning(relative_delta=1.0)
+    pilot_pruning: TritonPruning | None = TritonPruning(relative_delta=0.25, absolute_us=1.0)
     refined_pruning: TritonPruning | None = TritonPruning()
     evaluate: Callable[..., bool] | None = None
     quick_benchmark_group_size: int = 8
