@@ -31,6 +31,15 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "Image",
         "RemoteResult",
         "StageArtifactBinding",
+        "TritonKernel",
+        "TritonTuning",
+        "TritonPruning",
+        "TritonInputMetadata",
+        "TritonBenchmarkError",
+        "TritonQuickBenchmarkError",
+        "TritonCompilationError",
+        "TritonExecutionNotImplementedError",
+        "UnsupportedTritonKernelError",
         "TritonCandidate",
         "TritonCase",
         "UnsupportedGpuPoolError",
@@ -82,6 +91,8 @@ def test_documentation_local_links_resolve() -> None:
 
     for document in documents:
         text = document.read_text(encoding="utf-8")
+        # Code such as kernel[grid](args) is Python syntax, not a Markdown link.
+        text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
         for match in MARKDOWN_LINK.finditer(text):
             target = unquote(match.group(1).split("#", 1)[0])
             if not target or "://" in target:

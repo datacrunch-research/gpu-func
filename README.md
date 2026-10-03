@@ -171,3 +171,156 @@ uv run pytest -q
 mdbook build docs
 mdbook test docs
 ```
+
+## Triton compilation and quick benchmarking
+
+```python
+import gfaas as vfunc
+
+app = vfunc.App("kernels", image=vfunc.Image("registered-triton-image"))
+kernel = vfunc.TritonKernel(
+    native_kernel,
+    make_inputs=make_inputs,
+    reset_inputs=reset_inputs,
+    tuning=vfunc.TritonTuning(
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
+        evaluate=evaluate,
+    ),
+)
+with app.function(gpu="gb300", cpu_millicores=16000, memory_bytes=4 * 1024**3):
+    report = kernel[grid](a, b, out, M=m, N=n, K=k)
+    print(report["benchmark"]["best_configuration"])
+```
+
+`app.function(...)` works as its existing decorator and as a context manager.
+The block executes on the client and its vFunc calls execute remotely. Nested
+scopes on the same App inherit omitted settings; explicit values replace them,
+including `None` to clear a setting. `env` dictionaries replace the parent
+value. Contexts restore on exit, including exceptions, and are isolated across
+threads and asynchronous tasks. Decorated functions capture their settings.
+Kernel calls snapshot the current context; a kernel can be reused in different
+contexts safely.
+
+`TritonKernel` has no App, image, resource, or architecture arguments. A call
+requires an active context with an image and one GPU target. A small GPU Call
+discovers its CUDA architecture before CPU-only compilation. Benchmarking checks
+that its assigned GPU matches. Image overrides, timeouts, capacity waits,
+CPU/memory, environment variables and storage/log/output limits use the ordinary
+Function submission path. The App owns the client. Phase outputs are managed
+by the wrapper.
+
+Plain JIT and vanilla autotuning directly wrapping JIT are accepted. vFunc
+extracts the configurations and never runs Triton's autotuner. Additional
+wrappers, heuristics, callbacks, pruning, custom benchmarking, IR overrides and
+unsupported modifiers fail before submission. Mutable kernels are revalidated.
+Kernel/helper source is reconstructed without importing the author's module;
+unsupported dependencies fail clearly. Arbitrary Python source is not statically
+proven free of side effects.
+
+CPU compiler threads follow the CPU budget (one per whole core, up to 32).
+Omitted compilation resources default to 16 cores and 4 GiB per job. Small
+shards clamp CPU reservations. Defaults allow eight concurrent jobs with chunks
+targeting 128 configurations and growing to 256 before another dispatch wave.
+1,024 variants use eight chunks of 128; 1,536 use eight of 192. This can reserve
+128 cores and 32 GiB concurrently. `variants_per_job`, `max_concurrent_jobs`,
+and `cache_compression_level` remain compiler batching options (gzip level 1
+by default). Per-shard archives and SHA-256 manifests are verified before GPU
+use. Reports preserve variant order, Call IDs, phase timings, CPU time and cache
+sizes. Structural failures stop queued jobs while active results are retained.
+
+### Benchmark inputs, pruning and replication
+
+`TritonKernel` requires `make_inputs(metadata)` and `reset_inputs(*args, **kwargs)`.
+The generator returns `(args_tuple, kwargs_dict)` containing newly allocated CUDA
+tensors on the assigned GPU. Metadata contains `args` and `kwargs` entries with
+`kind="tensor"`, shape, stride, dtype name, storage offset and storage group, or
+`kind="value"` with the scalar value. Preserve those properties and aliases within
+one input set; separate sets must own independent storage. Reset modifies arguments
+in place; use a no-op for kernels that need no reset. Callbacks must be ordinary
+Python functions and use the provided inputs instead of capturing CUDA tensors.
+
+With `tuning=TritonTuning(...)`, launch syntax returns a compilation and benchmark
+report. It does not execute the winning configuration on the caller's tensors.
+Without tuning, the compile-only execution boundary still raises
+`TritonExecutionNotImplementedError` with the compilation report.
+
+```python
+kernel = vfunc.TritonKernel(
+    native_kernel,
+    make_inputs=make_inputs,
+    reset_inputs=reset_inputs,
+    tuning=vfunc.TritonTuning(
+        pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
+        evaluate=evaluate,
+        replication_factor=3,
+    ),
+)
+with app.function(gpu="gb300"):
+    report = kernel[grid](*args, **kwargs)
+print(report["benchmark"]["best_configuration"])
+```
+
+Each round retains times <= `best + max(relative_delta * best, absolute_us)`.
+Defaults allow 25% or 1 us in the five-trial pilot, then 5% or 0.1 us in
+refinement and global replica reduction, whichever allowance is larger. The
+pilot leaves more room for noisy early measurements. The smaller refined
+absolute allowance avoids replicating almost every configuration of a short
+kernel. These are heuristic starting points tested on GB300; increase either
+allowance for noisier workloads or use an unpruned control to check selection
+quality. Replication still defaults to three distinct GPUs.
+Set either pruning policy to `None` to disable that round's pruning while still
+measuring it. The old percentage-only delta and runtime-exemption options are
+replaced by these independent policies.
+
+The GPU builds independent sets until their logical tensor footprint exceeds its
+reported L2 size. Shared storages are counted conservatively once. This is an
+allocation and scheduling contract, not a guarantee of cache eviction: kernels
+may access only a subset, and resets can warm cache lines. The user must generate
+inputs that exercise the intended working set. Ring allocation and graph padding
+are bounded by `max_input_sets` (65,536) and `max_ring_bytes` (8 GiB); exceeding
+limits fails clearly. Reports include the ring footprint and allocation size.
+
+Pilot groups (eight variants by default) enqueue 100 L2 zeroing operations, then
+interleave five single-launch event trials per variant, rotating inputs without
+intermediate cache flushes. Synchronize once, take minima, and validate proposed
+new bests before using them for pruning. All pilot groups finish before survivors
+are regrouped. Refinement uses `ceil(10_000 / pilot_us)` launches per variant when
+at least ten are required, returning each minimum. Reset runs outside timed
+intervals. Refined pruning uses a validated best; every survivor passes the
+optional evaluator before final timing. Without an evaluator correctness is assumed.
+
+Final timing handles one configuration at a time. Set
+`Z = max(1, min(100, floor(1_000 / refined_us)))`. For `Z >= 10`, capture Z calls
+per graph and measure `ceil(25_000 / (Z * refined_us))` replays. Cycle distinct
+graphs spanning the ring because CUDA graphs fix input pointers. Pad to whole
+graphs so every captured call uses a distinct slot within its graph; this also
+allows resets outside replay timing. Return the minimum event duration divided
+by Z. For `Z < 10`, use direct events for
+`max(25, ceil(25_000 / refined_us))` launches. Both paths begin with 100 L2 flushes;
+final results include their trials and timing method.
+
+Initial shards report all candidates and their final timings. Client reduction
+applies refined pruning against the global best, then schedules only surviving
+configurations for additional final-only measurements. Every completed replica
+must report a different physical GPU UUID. The initial measurement counts toward
+`replication_factor` (three by default); final ranking uses the arithmetic mean.
+After each replica shard completes, partial means are reduced and pruned again;
+this is a heuristic, and partial results are never selected as completed winners.
+Replication is also re-evaluated for correctness on each device.
+
+The public vFunc scheduler selects a GPU model but has no device-exclusion field.
+Replica Calls therefore reserve `replication_factor` GPUs on one worker and
+measure their distinct device UUIDs separately. Devices already represented in
+that candidate's measurements are skipped. This avoids repeatedly scheduling
+single-GPU retries onto the same available device. Each final-only shard requires
+that many free GPUs on one worker; current GB300 trays have four GPUs, so higher
+replication factors require a worker with more GPUs. Calls are bounded by the
+normal capacity deadline and `replication_max_attempts`. Failed capacity or lack
+of enough distinct devices raises `TritonBenchmarkError` with retained reports
+and Call IDs. Generic single-device dispatch also verifies identities and never
+counts duplicate UUID placements as independent replicas.
+
+`quick_benchmark_variants_per_job` defaults to 256 and GPU concurrency to four;
+these are configurable batching limits. All phases reuse existing App/Image/
+Function settings and CPU-prepared artifacts; no service deployment is required.
