@@ -236,9 +236,18 @@ retains configurations within 10% of the final fastest accepted quick runtime.
 `pruning_min_runtime_us` defaults to 100: faster configurations bypass pruning.
 Set it to zero to disable that exemption. Invalid and failed kernels are excluded.
 
-Timing uses a CUDA graph with 20 launches per replay and the median of five
-trials after warmup, excluding compilation, transfers and host launch overhead.
-Warmup/repeated launches can mutate inputs; evaluation uses fresh original inputs.
+Each kernel is synchronized, launched once and synchronized again to catch
+execution errors. Five trials then record CUDA start/end events around one
+launch, followed by zeroing a buffer twice the GPU's reported L2 cache size.
+One final synchronization completes the events; the fastest trial is the quick
+runtime. The cache clear is outside the timed interval.
+
+Quick GPU jobs reuse one input set across their configurations. Warmup and
+repeated launches can mutate these inputs; evaluation uses fresh original inputs.
+`quick_benchmark_variants_per_job` defaults to 256 and
+`quick_benchmark_max_concurrent_jobs` to four, reserving up to four GPUs.
+Each shard maintains a validated local best. The client gathers every timing and
+reapplies pruning against the fastest validated best across all shards.
 
 The optional `evaluate(candidate, *args, **kwargs) -> bool` runs remotely whenever
 a result would establish a new best. `candidate` is an ordinary callable fixed

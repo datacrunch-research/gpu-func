@@ -10,7 +10,6 @@ import io
 import json
 import math
 import os
-import statistics
 import sys
 import tarfile
 import tempfile
@@ -126,6 +125,35 @@ def bound_candidate(
     return candidate
 
 
+def l2_flush_buffer(torch: Any) -> Any:
+    cuda = ctypes.CDLL("libcuda.so.1")
+    size = ctypes.c_int()
+    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE. The job exposes one device.
+    status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, 0)
+    if status or size.value <= 0:
+        raise RuntimeError("Cannot determine GPU L2 cache size")
+    return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
+
+
+def measure_quick(
+    func: Any, args: tuple[Any, ...], kwargs: dict[str, Any], flush: Any, torch: Any
+) -> list[float]:
+    torch.cuda.synchronize()
+    func(*args, **kwargs)
+    torch.cuda.synchronize()
+    events = []
+    for _ in range(5):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        func(*args, **kwargs)
+        end.record()
+        flush.zero_()
+        events.append((start, end))
+    torch.cuda.synchronize()
+    return [start.elapsed_time(end) * 1000 for start, end in events]
+
+
 def quick_benchmark(
     *,
     source: str,
@@ -157,7 +185,7 @@ def quick_benchmark(
         cache = root / "cache"
         cache.mkdir()
         prepared = restore_caches(artifacts, cache, source, target, triton_version)
-        if set(prepared) != {v["id"] for v in variants_list}:
+        if not {v["id"] for v in variants_list} <= set(prepared):
             raise RuntimeError("Compiler artifacts have an incomplete variant set")
         os.environ["TRITON_CACHE_DIR"] = str(cache)
         if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
@@ -173,6 +201,13 @@ def quick_benchmark(
         jit = getattr(module, kernel_name)
         signature = inspect.signature(jit.fn)
         modern = "constexprs" in inspect.signature(ASTSource).parameters
+
+        def fresh_inputs() -> tuple[Any, Any]:
+            # Shared storage and strides survive; device ordinals are remapped.
+            return torch.load(io.BytesIO(inputs), map_location="cuda:0", weights_only=False)
+
+        benchmark_args, benchmark_kwargs = fresh_inputs()
+        flush = l2_flush_buffer(torch)
         for variant in variants_list:
             row: dict[str, Any] = {"id": variant["id"]}
             if prepared[row["id"]]["status"] != "compiled":
@@ -205,32 +240,11 @@ def quick_benchmark(
             if compiled.hash != prepared[row["id"]]["cache_hash"]:
                 raise RuntimeError("Compiled cache identity differs from CPU preparation")
 
-            def fresh_inputs() -> tuple[Any, Any]:
-                # torch.save/load preserves shared storage and strides and remaps
-                # every tensor to the GPU assigned to this job.
-                return torch.load(io.BytesIO(inputs), map_location="cuda:0", weights_only=False)
-
             candidate = bound_candidate(compiled, constants, variant["options"], signature, grid)
 
             try:
-                args, kwargs = fresh_inputs()
-                for _ in range(3):
-                    candidate(*args, **kwargs)
-                torch.cuda.synchronize()
-                graph = torch.cuda.CUDAGraph()
-                with torch.cuda.graph(graph):
-                    for _ in range(20):
-                        candidate(*args, **kwargs)
-                trials = []
-                for _ in range(5):
-                    start = torch.cuda.Event(enable_timing=True)
-                    end = torch.cuda.Event(enable_timing=True)
-                    start.record()
-                    graph.replay()
-                    end.record()
-                    end.synchronize()
-                    trials.append(start.elapsed_time(end) * 1000 / 20)
-                runtime = statistics.median(trials)
+                trials = measure_quick(candidate, benchmark_args, benchmark_kwargs, flush, torch)
+                runtime = min(trials)
                 if not math.isfinite(runtime) or runtime <= 0:
                     raise RuntimeError("Quick benchmark returned an invalid runtime")
                 row.update(
@@ -265,5 +279,7 @@ def quick_benchmark(
         "quick_benchmark_delta": delta,
         "pruning_min_runtime_us": minimum_us,
         "evaluation_enabled": evaluate is not None,
-        "timing_method": "CUDA graph: 20 launches per replay, median of 5 trials",
+        "timing_method": "CUDA events: fastest of 5 single launches; L2 zeroing after each trial",
+        "benchmark_input_loads": 1,
+        "l2_flush_bytes": flush.numel() * flush.element_size(),
     }

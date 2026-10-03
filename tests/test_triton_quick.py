@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-from contextlib import nullcontext
 from types import ModuleType, SimpleNamespace
 
 import cloudpickle
@@ -21,6 +20,9 @@ from gfaas.triton_policy import portable_callable
         dict(pruning_min_runtime_us=-1),
         dict(pruning_min_runtime_us=float("inf")),
         dict(evaluate=1),
+        dict(quick_benchmark_variants_per_job=0),
+        dict(quick_benchmark_max_concurrent_jobs=0),
+        dict(quick_benchmark_max_concurrent_jobs=33),
     ],
 )
 def test_invalid_tuning_policy(options):
@@ -100,7 +102,7 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
             pass
 
         def elapsed_time(self, other):
-            return times[state["block"]] * 20 / 1000
+            return times[state["block"]] / 1000
 
     def jit(fn):
         return SimpleNamespace(fn=fn, arg_names=["X", "N", "BLOCK"])
@@ -110,16 +112,26 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
     modules["triton"].compile = compile
     modules["triton.compiler"].ASTSource = AST
     modules["triton.backends.compiler"].GPUTarget = lambda **kw: kw
-    modules["torch"].load = lambda *a, **kw: (({"block": 0},), {"N": 1})
+    loads = []
+
+    def load(*a, **kw):
+        inputs = ({"block": 0},)
+        loads.append(inputs)
+        return inputs, {"N": 1}
+
+    modules["torch"].load = load
     modules["torch"].cuda = SimpleNamespace(
         synchronize=lambda: None,
-        CUDAGraph=lambda: SimpleNamespace(replay=lambda: None),
-        graph=lambda _: nullcontext(),
         Event=Event,
     )
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(runner, "probe_target", lambda: target)
+    monkeypatch.setattr(
+        runner,
+        "l2_flush_buffer",
+        lambda _: SimpleNamespace(zero_=lambda: None, numel=lambda: 1024, element_size=lambda: 1),
+    )
     monkeypatch.setattr(
         runner,
         "restore_caches",
@@ -144,6 +156,8 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
         delta=0.10,
         minimum_us=0,
     )
+    assert len(loads) == 4  # One shared benchmark set and three fresh evaluations.
+    loads.clear()
     assert result["best_id"] == "2" and result["best_runtime_us"] == 100
     assert result["retained_ids"] == ["2", "4"]
     assert [r["evaluation"] for r in result["results"]] == [
@@ -164,5 +178,36 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
         delta=0.10,
         minimum_us=0,
     )
+    assert len(loads) == 1  # All four variants share their benchmark inputs.
     assert result["best_id"] == "3" and result["retained_ids"] == ["3"]
     assert all(r["evaluation"] == "skipped" for r in result["results"])
+
+
+def test_quick_timing_order_flush_and_fastest_of_five():
+    log = []
+    durations = iter([0.009, 0.003, 0.008, 0.004, 0.005])
+
+    roles = iter(["start", "end"] * 5)
+
+    class Event:
+        def __init__(self, **kwargs):
+            self.role = next(roles)
+
+        def record(self):
+            log.append(self.role)
+
+        def elapsed_time(self, other):
+            assert log[-1] == "sync"
+            return next(durations)
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(Event=Event, synchronize=lambda: log.append("sync"))
+    )
+    flush = SimpleNamespace(zero_=lambda: log.append("flush"))
+    trials = runner.measure_quick(
+        lambda x, *, y: log.append(("call", x, y)), (1,), {"y": 2}, flush, torch
+    )
+    assert log[:3] == ["sync", ("call", 1, 2), "sync"]
+    assert log[3:-1] == ["start", ("call", 1, 2), "end", "flush"] * 5
+    assert log[-1] == "sync" and trials == [9, 3, 8, 4, 5]
+    assert min(trials) == 3

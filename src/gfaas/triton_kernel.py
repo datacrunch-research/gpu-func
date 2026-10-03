@@ -268,27 +268,105 @@ class TritonKernel:
                 artifacts.append(ArtifactRef(output["artifact_id"]))
             benchmark = replace(self.gpu_function, handler=triton_quick_runner.quick_benchmark)
             assert self.tuning is not None and self.tuning.quick_benchmark_delta is not None
-            quick = benchmark.spawn(
-                source=source,
-                kernel_name=jit.fn.__name__,
-                variants=json.dumps(variants),
-                artifacts=artifacts,
-                inputs=payload,
-                callbacks=callbacks,
-                target=target,
-                triton_version=triton.__version__,
-                delta=self.tuning.quick_benchmark_delta,
-                minimum_us=self.tuning.pruning_min_runtime_us,
+            report["quick_benchmark"] = self._quick_shards(
+                benchmark,
+                source,
+                jit.fn.__name__,
+                variants,
+                artifacts,
+                payload,
+                callbacks,
+                target,
+                triton.__version__,
+                report["call_ids"],
             )
-            report["call_ids"].append(quick.call_id)
-            try:
-                report["quick_benchmark"] = quick.wait()
-            except Exception as error:
-                report["quick_benchmark"] = {"status": "failed", "diagnostics": str(error)}
-                raise TritonQuickBenchmarkError(report, quick.call_id) from error
             if report["quick_benchmark"]["status"] != "passed":
-                raise TritonQuickBenchmarkError(report, quick.call_id)
+                raise TritonQuickBenchmarkError(report, call_id or probe.call_id)
         raise TritonExecutionNotImplementedError(report, call_id)
+
+    def _quick_shards(
+        self,
+        benchmark: Function,
+        source: str,
+        kernel_name: str,
+        variants: list[dict[str, Any]],
+        artifacts: list[ArtifactRef],
+        payload: bytes,
+        callbacks: bytes | None,
+        target: dict[str, Any],
+        version: str,
+        call_ids: list[str],
+    ) -> dict[str, Any]:
+        policy = self.tuning
+        assert policy is not None and policy.quick_benchmark_delta is not None
+        count = (
+            len(variants) + policy.quick_benchmark_variants_per_job - 1
+        ) // policy.quick_benchmark_variants_per_job
+        chunks = [variants[i::count] for i in range(count)]
+
+        def run(chunk: list[dict[str, Any]]) -> dict[str, Any]:
+            identity = None
+            try:
+                result = benchmark.spawn(
+                    source=source,
+                    kernel_name=kernel_name,
+                    variants=json.dumps(chunk),
+                    artifacts=artifacts,
+                    inputs=payload,
+                    callbacks=callbacks,
+                    target=target,
+                    triton_version=version,
+                    delta=policy.quick_benchmark_delta,
+                    minimum_us=policy.pruning_min_runtime_us,
+                )
+                identity = result.call_id
+                shard = result.wait()
+                if (
+                    not isinstance(shard, dict)
+                    or not isinstance(shard.get("results"), list)
+                    or {r["id"] for r in shard["results"]} != {v["id"] for v in chunk}
+                    or len(shard["results"]) != len(chunk)
+                ):
+                    raise GfaasError("Incomplete quick benchmark shard report")
+                return {"call_id": identity, "report": shard}
+            except Exception as error:
+                return {
+                    "call_id": identity,
+                    "report": {
+                        "status": "failed",
+                        "job_failed": True,
+                        "diagnostics": str(error),
+                        "results": [{"id": v["id"], "status": "shard_failed"} for v in chunk],
+                    },
+                }
+
+        with ThreadPoolExecutor(
+            max_workers=min(count, policy.quick_benchmark_max_concurrent_jobs)
+        ) as pool:
+            shards = list(pool.map(run, chunks))
+        call_ids.extend(s["call_id"] for s in shards if s["call_id"])
+        measured = {r["id"]: r for s in shards for r in s["report"]["results"]}
+        rows = [measured[v["id"]] for v in variants]
+        accepted = [s["report"] for s in shards if s["report"].get("best_id") is not None]
+        winner = min(accepted, key=lambda s: s["best_runtime_us"]) if accepted else None
+        best_us = winner["best_runtime_us"] if winner else None
+        return {
+            "schema": "vfunc.triton-quick-batch/v1",
+            "status": "passed"
+            if winner and not any(s["report"].get("job_failed") for s in shards)
+            else "failed",
+            "results": rows,
+            "best_id": winner["best_id"] if winner else None,
+            "best_runtime_us": best_us,
+            "retained_ids": triton_quick_runner.select_rows(
+                rows, best_us, policy.quick_benchmark_delta, policy.pruning_min_runtime_us
+            ),
+            "quick_benchmark_delta": policy.quick_benchmark_delta,
+            "pruning_min_runtime_us": policy.pruning_min_runtime_us,
+            "evaluation_enabled": policy.evaluate is not None,
+            "timing_method": "CUDA events: fastest of 5 single launches; L2 zeroing after each trial",
+            "shards": shards,
+        }
 
     def _dispatch(
         self,

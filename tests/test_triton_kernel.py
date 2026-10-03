@@ -455,7 +455,16 @@ def test_quick_gpu_phase_receives_context_input_snapshot_and_compiler_artifacts(
         def submit(self, **kwargs):
             if kwargs["function"].__name__ == "quick_benchmark":
                 self.quick_request = kwargs
-                return SimpleNamespace(call_id="call_quick", wait=lambda: {"status": "passed"})
+                variants = json.loads(kwargs["kwargs"]["variants"])
+                report = {
+                    "status": "passed",
+                    "best_id": variants[0]["id"],
+                    "best_runtime_us": 10,
+                    "results": [
+                        {"id": v["id"], "status": "measured", "runtime_us": 10} for v in variants
+                    ],
+                }
+                return SimpleNamespace(call_id="call_quick", wait=lambda: report)
             return super().submit(**kwargs)
 
         def get_call_result(self, identity):
@@ -480,3 +489,54 @@ def test_quick_gpu_phase_receives_context_input_snapshot_and_compiler_artifacts(
     assert data["delta"] == 0.15 and data["minimum_us"] == 50
     assert cloudpickle.loads(data["callbacks"]) == ((1,), None)
     assert outcome.value.call_ids == ["call_probe", "call_test", "call_quick"]
+
+
+def test_quick_shards_gather_against_global_valid_best():
+    from gfaas import TritonTuning
+
+    variants = [{"id": str(i)} for i in range(5)]
+    times = {"0": 1, "1": 100, "2": 109, "3": 130, "4": 120}
+    chunks = []
+
+    class Benchmark:
+        def spawn(self, **kwargs):
+            chunk = json.loads(kwargs["variants"])
+            chunks.append([v["id"] for v in chunk])
+            rows = [
+                {
+                    "id": v["id"],
+                    "runtime_us": times[v["id"]],
+                    "status": "invalid" if v["id"] == "0" else "measured",
+                }
+                for v in chunk
+            ]
+            valid = [r for r in rows if r["status"] == "measured"]
+            best = min(valid, key=lambda r: r["runtime_us"])
+            return SimpleNamespace(
+                call_id="call_" + chunk[0]["id"],
+                wait=lambda: {
+                    "status": "passed",
+                    "results": rows,
+                    "best_id": best["id"],
+                    "best_runtime_us": best["runtime_us"],
+                },
+            )
+
+    kernel = TritonKernel(
+        JIT(add),
+        tuning=TritonTuning(
+            quick_benchmark_delta=0.10,
+            pruning_min_runtime_us=0,
+            quick_benchmark_variants_per_job=2,
+            quick_benchmark_max_concurrent_jobs=2,
+        ),
+    )
+    calls = []
+    report = kernel._quick_shards(
+        Benchmark(), "source", "add", variants, [], b"inputs", None, {}, "test", calls
+    )
+    assert sorted(chunks) == [["0", "3"], ["1", "4"], ["2"]]
+    assert report["best_id"] == "1"
+    assert report["retained_ids"] == ["1", "2"]
+    assert [r["id"] for r in report["results"]] == [str(i) for i in range(5)]
+    assert calls == ["call_0", "call_1", "call_2"]
