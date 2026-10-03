@@ -318,6 +318,7 @@ class TritonKernel:
                     triton_version=version,
                     delta=policy.quick_benchmark_delta,
                     minimum_us=policy.pruning_min_runtime_us,
+                    group_size=policy.quick_benchmark_group_size,
                 )
                 identity = result.call_id
                 shard = result.wait()
@@ -364,7 +365,7 @@ class TritonKernel:
             "quick_benchmark_delta": policy.quick_benchmark_delta,
             "pruning_min_runtime_us": policy.pruning_min_runtime_us,
             "evaluation_enabled": policy.evaluate is not None,
-            "timing_method": "CUDA events: 5-trial pilot, then 10 ms minimum when at least 10 iterations; 100 preflushes per stage",
+            "timing_method": "Interleaved CUDA events: 5-trial pilot, 2x pruning, regrouped 10 ms minimum; 100 preflushes per group",
             "shards": shards,
         }
 

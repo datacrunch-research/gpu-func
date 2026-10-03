@@ -172,6 +172,122 @@ def measure_quick(
     }
 
 
+def measure_group(
+    candidates: list[Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    flush: Any,
+    torch: Any,
+    counts: list[int],
+) -> list[list[float]]:
+    for _ in range(100):
+        flush.zero_()
+    events: list[list[Any]] = [[] for _ in candidates]
+    for iteration in range(max(counts)):
+        for index, candidate in enumerate(candidates):
+            if iteration >= counts[index]:
+                continue
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            candidate(*args, **kwargs)
+            end.record()
+            flush.zero_()
+            events[index].append((start, end))
+    torch.cuda.synchronize()
+    return [[start.elapsed_time(end) * 1000 for start, end in pairs] for pairs in events]
+
+
+def benchmark_candidates(
+    entries: list[tuple[dict[str, Any], Any]],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    fresh_inputs: Any,
+    evaluate: Any,
+    flush: Any,
+    torch: Any,
+    group_size: int,
+    minimum_us: float,
+) -> tuple[float | None, str | None]:
+    best_us = None
+    best_id = None
+
+    def accept(row: dict[str, Any], candidate: Any) -> None:
+        nonlocal best_us, best_id
+        runtime = row["runtime_us"]
+        if not math.isfinite(runtime) or runtime <= 0:
+            raise RuntimeError("Quick benchmark returned an invalid runtime")
+        if best_us is None or runtime < best_us:
+            if evaluate is not None and row.get("evaluation") != "passed":
+                eval_args, eval_kwargs = fresh_inputs()
+                verdict = evaluate(candidate, *eval_args, **eval_kwargs)
+                torch.cuda.synchronize()
+                if type(verdict) is not bool:
+                    raise TypeError("evaluate must return a bool")
+                row["evaluation"] = "passed" if verdict else "failed"
+                if not verdict:
+                    row["status"] = "invalid"
+                    return
+            best_us, best_id = runtime, row["id"]
+
+    ready = []
+    for row, candidate in entries:
+        try:
+            torch.cuda.synchronize()
+            candidate(*args, **kwargs)
+            torch.cuda.synchronize()
+            ready.append((row, candidate))
+        except Exception as error:
+            row.update(status="benchmark_failed", diagnostics=str(error))
+    for offset in range(0, len(ready), group_size):
+        group = ready[offset : offset + group_size]
+        trials = measure_group([c for _, c in group], args, kwargs, flush, torch, [5] * len(group))
+        for (row, candidate), values in zip(group, trials, strict=True):
+            row.update(
+                status="measured",
+                runtime_us=min(values),
+                pilot_trial_us=values,
+                trial_us=values,
+                refinement_iterations=0,
+                evaluation="not_needed" if evaluate else "skipped",
+            )
+            accept(row, candidate)
+    survivors = []
+    for row, candidate in ready:
+        if row["status"] != "measured":
+            continue
+        if (
+            best_us is not None
+            and row["runtime_us"] >= minimum_us
+            and row["runtime_us"] >= 2 * best_us
+        ):
+            row["status"] = "pilot_pruned"
+            continue
+        count = math.ceil(10_000 / row["runtime_us"])
+        if count >= 10:
+            survivors.append((row, candidate, count))
+    # Re-establish the best in the second-stage timing domain. Unrefined long
+    # kernels retain their pilot time; candidates already verified stay verified.
+    best_us, best_id = None, None
+    for row, candidate in ready:
+        if row["status"] == "measured" and math.ceil(10_000 / row["runtime_us"]) < 10:
+            accept(row, candidate)
+    for offset in range(0, len(survivors), group_size):
+        refined_group = survivors[offset : offset + group_size]
+        trials = measure_group(
+            [c for _, c, _ in refined_group],
+            args,
+            kwargs,
+            flush,
+            torch,
+            [count for _, _, count in refined_group],
+        )
+        for (row, candidate, count), values in zip(refined_group, trials, strict=True):
+            row.update(runtime_us=min(values), trial_us=values, refinement_iterations=count)
+            accept(row, candidate)
+    return best_us, best_id
+
+
 def quick_benchmark(
     *,
     source: str,
@@ -184,6 +300,7 @@ def quick_benchmark(
     triton_version: str,
     delta: float,
     minimum_us: float,
+    group_size: int = 8,
 ) -> dict[str, Any]:
     import cloudpickle
     import torch  # type: ignore[import-not-found]
@@ -226,6 +343,7 @@ def quick_benchmark(
 
         benchmark_args, benchmark_kwargs = fresh_inputs()
         flush = l2_flush_buffer(torch)
+        entries = []
         for variant in variants_list:
             row: dict[str, Any] = {"id": variant["id"]}
             if prepared[row["id"]]["status"] != "compiled":
@@ -260,32 +378,19 @@ def quick_benchmark(
 
             candidate = bound_candidate(compiled, constants, variant["options"], signature, grid)
 
-            try:
-                timing = measure_quick(candidate, benchmark_args, benchmark_kwargs, flush, torch)
-                runtime = timing["runtime_us"]
-                if not math.isfinite(runtime) or runtime <= 0:
-                    raise RuntimeError("Quick benchmark returned an invalid runtime")
-                row.update(
-                    status="measured",
-                    **timing,
-                    evaluation="not_needed" if evaluate else "skipped",
-                )
-            except Exception as error:
-                rows.append({**row, "status": "benchmark_failed", "diagnostics": str(error)})
-                continue
-            if best_us is None or runtime < best_us:
-                if evaluate is not None:
-                    args, kwargs = fresh_inputs()
-                    verdict = evaluate(candidate, *args, **kwargs)
-                    torch.cuda.synchronize()
-                    if type(verdict) is not bool:
-                        raise TypeError("evaluate must return a bool")
-                    row["evaluation"] = "passed" if verdict else "failed"
-                    if not verdict:
-                        row["status"] = "invalid"
-                if row["status"] == "measured":
-                    best_us, best_id = runtime, row["id"]
             rows.append(row)
+            entries.append((row, candidate))
+        best_us, best_id = benchmark_candidates(
+            entries,
+            benchmark_args,
+            benchmark_kwargs,
+            fresh_inputs,
+            evaluate,
+            flush,
+            torch,
+            group_size,
+            minimum_us,
+        )
     return {
         "schema": "vfunc.triton-quick/v1",
         "status": "passed" if best_id else "failed",
@@ -296,7 +401,9 @@ def quick_benchmark(
         "quick_benchmark_delta": delta,
         "pruning_min_runtime_us": minimum_us,
         "evaluation_enabled": evaluate is not None,
-        "timing_method": "CUDA events: 5-trial pilot, then 10 ms minimum when at least 10 iterations; 100 preflushes per stage",
+        "timing_method": "Interleaved CUDA events: 5-trial pilot, 2x pruning, regrouped 10 ms minimum; 100 preflushes per group",
         "benchmark_input_loads": 1,
+        "group_size": group_size,
+        "pilot_pruning_factor": 2,
         "l2_flush_bytes": flush.numel() * flush.element_size(),
     }

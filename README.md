@@ -236,22 +236,29 @@ retains configurations within 10% of the final fastest accepted quick runtime.
 `pruning_min_runtime_us` defaults to 100: faster configurations bypass pruning.
 Set it to zero to disable that exemption. Invalid and failed kernels are excluded.
 
-Each kernel is synchronized, launched once and synchronized again to catch
-execution errors. Enqueue 100 L2 flushes without synchronization, then five
-single-launch CUDA event trials, each followed by an L2 flush. Synchronize once
-and take the fastest pilot trial. Compute `ceil(10_000 / pilot_us)` iterations
-to cover 10 ms of kernel time. If fewer than ten iterations are needed, return
-the pilot minimum. Otherwise enqueue another 100 flushes and repeat the event
-loop for that iteration count, returning its minimum after one final synchronization.
-Flushes zero a buffer twice the reported L2 cache size, outside the timed interval.
-Reports retain both stages' timings and the refinement iteration count.
+Each compiled kernel is synchronized, launched once and synchronized again to
+catch execution errors. `quick_benchmark_group_size` controls interleaved groups
+(default eight). Each group enqueues 100 L2 flushes, then five rounds of
+start event → one kernel launch → end event → flush, visiting every kernel in
+order each round. One synchronization completes the group's events.
+
+All pilot groups finish before refinement. Take each kernel's pilot minimum;
+exclude invalid kernels, then prune runtimes at least twice the fastest valid
+pilot runtime, except those below `pruning_min_runtime_us`. This first cutoff
+uses the best across batches in the same GPU shard. The client applies the final
+configured delta against the global valid best when all shards return.
+
+Regroup survivors for the second stage. Each kernel uses
+`ceil(10_000 / pilot_us)` iterations to cover 10 ms of compute; fewer than ten
+skips refinement. Groups enqueue another 100 flushes and interleave kernels
+round by round until each has completed its own iteration count. Synchronize,
+then return each kernel's minimum. Reports retain both stages and pruning status.
+Flushes zero twice the reported L2 cache size outside timed intervals.
 
 Quick GPU jobs reuse one input set across their configurations. Warmup and
 repeated launches can mutate these inputs; evaluation uses fresh original inputs.
 `quick_benchmark_variants_per_job` defaults to 256 and
 `quick_benchmark_max_concurrent_jobs` to four, reserving up to four GPUs.
-Each shard maintains a validated local best. The client gathers every timing and
-reapplies pruning against the fastest validated best across all shards.
 
 The optional `evaluate(candidate, *args, **kwargs) -> bool` runs remotely whenever
 a result would establish a new best. `candidate` is an ordinary callable fixed

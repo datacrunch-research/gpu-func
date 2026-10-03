@@ -20,6 +20,7 @@ from gfaas.triton_policy import portable_callable
         dict(pruning_min_runtime_us=-1),
         dict(pruning_min_runtime_us=float("inf")),
         dict(evaluate=1),
+        dict(quick_benchmark_group_size=0),
         dict(quick_benchmark_variants_per_job=0),
         dict(quick_benchmark_max_concurrent_jobs=0),
         dict(quick_benchmark_max_concurrent_jobs=33),
@@ -96,13 +97,13 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
             pass
 
         def record(self):
-            pass
+            self.block = state["block"]
 
         def synchronize(self):
             pass
 
         def elapsed_time(self, other):
-            return times[state["block"]] / 1000
+            return times[other.block] / 1000
 
     def jit(fn):
         return SimpleNamespace(fn=fn, arg_names=["X", "N", "BLOCK"])
@@ -246,3 +247,76 @@ def test_quick_refinement_uses_ten_ms_iteration_count_and_minimum():
     assert result["trial_us"] == [2000] * 9 + [500]
     assert log.count("flush") == 100 + 5 + 100 + 10
     assert log.count("sync") == 4
+
+
+def test_group_timing_interleaves_candidates_and_handles_different_counts():
+    log = []
+
+    class Event:
+        def __init__(self, **kwargs):
+            pass
+
+        def record(self):
+            log.append("event")
+
+        def elapsed_time(self, other):
+            return 0.1
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(Event=Event, synchronize=lambda: log.append("sync"))
+    )
+    values = runner.measure_group(
+        [lambda: log.append("a"), lambda: log.append("b")],
+        (),
+        {},
+        SimpleNamespace(zero_=lambda: log.append("flush")),
+        torch,
+        [3, 2],
+    )
+    assert [x for x in log if x in ["a", "b"]] == ["a", "b", "a", "b", "a"]
+    assert log[:100] == ["flush"] * 100
+    assert log.count("sync") == 1
+    assert values == [[100] * 3, [100] * 2]
+
+
+def test_tiered_pruning_uses_valid_best_across_batches_then_regroups(monkeypatch):
+    timings = {"invalid": 1, "best": 100, "cutoff": 200, "near": 150, "exempt": 250, "slow": 400}
+    calls = []
+    entries = []
+    for name in timings:
+
+        def candidate():
+            pass
+
+        candidate.identity = name
+        entries.append(({"id": name}, candidate))
+
+    def measure(candidates, args, kwargs, flush, torch, counts):
+        calls.append(([c.identity for c in candidates], counts))
+        return [[timings[c.identity]] * n for c, n in zip(candidates, counts, strict=True)]
+
+    monkeypatch.setattr(runner, "measure_group", measure)
+    torch = SimpleNamespace(cuda=SimpleNamespace(synchronize=lambda: None))
+    best, identity = runner.benchmark_candidates(
+        entries, (), {}, lambda: ((), {}), lambda c: c.identity != "invalid", None, torch, 2, 300
+    )
+    # Pilot all three groups first; 200 and 250 us survive because they are <300 us.
+    assert [ids for ids, _ in calls[:3]] == [
+        ["invalid", "best"],
+        ["cutoff", "near"],
+        ["exempt", "slow"],
+    ]
+    assert [ids for ids, _ in calls[3:]] == [["best", "cutoff"], ["near", "exempt"]]
+    assert best == 100 and identity == "best"
+    assert entries[0][0]["status"] == "invalid"
+    assert entries[-1][0]["status"] == "pilot_pruned"
+    calls.clear()
+    for row, _ in entries:
+        row.clear()
+    for name, (row, _) in zip(timings, entries, strict=True):
+        row["id"] = name
+    runner.benchmark_candidates(
+        entries, (), {}, lambda: ((), {}), lambda c: c.identity != "invalid", None, torch, 2, 0
+    )
+    assert [ids for ids, _ in calls[3:]] == [["best", "near"]]
+    assert entries[2][0]["status"] == "pilot_pruned"  # Exactly 2x is pruned.

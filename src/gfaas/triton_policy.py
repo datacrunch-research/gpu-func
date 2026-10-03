@@ -15,6 +15,7 @@ class TritonTuning:
     quick_benchmark_delta: float | None = None
     evaluate: Callable[..., bool] | None = None
     pruning_min_runtime_us: float = 100.0
+    quick_benchmark_group_size: int = 8
     quick_benchmark_variants_per_job: int = 256
     quick_benchmark_max_concurrent_jobs: int = 4
 
@@ -26,7 +27,8 @@ class TritonTuning:
         if not math.isfinite(self.pruning_min_runtime_us) or self.pruning_min_runtime_us < 0:
             raise ValueError("pruning_min_runtime_us must be finite and nonnegative")
         if (
-            self.quick_benchmark_variants_per_job < 1
+            self.quick_benchmark_group_size < 1
+            or self.quick_benchmark_variants_per_job < 1
             or not 1 <= self.quick_benchmark_max_concurrent_jobs <= 32
         ):
             raise ValueError("Invalid quick benchmark sharding limits")
