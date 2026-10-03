@@ -180,17 +180,16 @@ import gfaas as vfunc
 app = vfunc.App("kernels", image=vfunc.Image("registered-triton-image"))
 kernel = vfunc.TritonKernel(
     native_kernel,
+    make_inputs=make_inputs,
+    reset_inputs=reset_inputs,
     tuning=vfunc.TritonTuning(
-        quick_benchmark_delta=0.10,
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.10, absolute_us=1.0),
         evaluate=evaluate,
-        pruning_min_runtime_us=100,
     ),
 )
 with app.function(gpu="gb300", cpu_millicores=16000, memory_bytes=4 * 1024**3):
-    try:
-        kernel[grid](a, b, out, M=m, N=n, K=k)
-    except vfunc.TritonExecutionNotImplementedError as result:
-        print(result.call_ids, result.report)
+    report = kernel[grid](a, b, out, M=m, N=n, K=k)
+    print(report["benchmark"]["best_configuration"])
 ```
 
 `app.function(...)` works as its existing decorator and as a context manager.
@@ -229,62 +228,92 @@ by default). Per-shard archives and SHA-256 manifests are verified before GPU
 use. Reports preserve variant order, Call IDs, phase timings, CPU time and cache
 sizes. Structural failures stop queued jobs while active results are retained.
 
-### Quick benchmark policy
+### Benchmark inputs, pruning and replication
 
-`quick_benchmark_delta` is an optional finite nonnegative fraction. `0.10`
-retains configurations within 10% of the final fastest accepted quick runtime.
-`pruning_min_runtime_us` defaults to 100: faster configurations bypass pruning.
-Set it to zero to disable that exemption. Invalid and failed kernels are excluded.
+`TritonKernel` requires `make_inputs(metadata)` and `reset_inputs(*args, **kwargs)`.
+The generator returns `(args_tuple, kwargs_dict)` containing newly allocated CUDA
+tensors on the assigned GPU. Metadata contains `args` and `kwargs` entries with
+`kind="tensor"`, shape, stride, dtype name, storage offset and storage group, or
+`kind="value"` with the scalar value. Preserve those properties and aliases within
+one input set; separate sets must own independent storage. Reset modifies arguments
+in place; use a no-op for kernels that need no reset. Callbacks must be ordinary
+Python functions and use the provided inputs instead of capturing CUDA tensors.
 
-Each compiled kernel is synchronized, launched once and synchronized again to
-catch execution errors. `quick_benchmark_group_size` controls interleaved groups
-(default eight). Each group enqueues 100 L2 flushes, then five rounds of
-start event → one kernel launch → end event → flush, visiting every kernel in
-order each round. One synchronization completes the group's events.
+With `tuning=TritonTuning(...)`, launch syntax returns a compilation and benchmark
+report. It does not execute the winning configuration on the caller's tensors.
+Without tuning, the compile-only execution boundary still raises
+`TritonExecutionNotImplementedError` with the compilation report.
 
-All pilot groups finish before refinement. Take each kernel's pilot minimum;
-exclude invalid kernels, then prune runtimes at least twice the fastest valid
-pilot runtime, except those below `pruning_min_runtime_us`. This first cutoff
-uses the best across batches in the same GPU shard. The client applies the final
-configured delta against the global valid best when all shards return.
+```python
+kernel = vfunc.TritonKernel(
+    native_kernel,
+    make_inputs=make_inputs,
+    reset_inputs=reset_inputs,
+    tuning=vfunc.TritonTuning(
+        pilot_pruning=vfunc.TritonPruning(relative_delta=1.0, absolute_us=1.0),
+        refined_pruning=vfunc.TritonPruning(relative_delta=0.10, absolute_us=1.0),
+        evaluate=evaluate,
+        replication_factor=3,
+    ),
+)
+with app.function(gpu="gb300"):
+    report = kernel[grid](*args, **kwargs)
+print(report["benchmark"]["best_configuration"])
+```
 
-Regroup survivors for the second stage. Each kernel uses
-`ceil(10_000 / pilot_us)` iterations to cover 10 ms of compute; fewer than ten
-skips refinement. Groups enqueue another 100 flushes and interleave kernels
-round by round until each has completed its own iteration count. Synchronize,
-then return each kernel's minimum. Reports retain both stages and pruning status.
-Flushes zero twice the reported L2 cache size outside timed intervals.
+Each round retains times <= `best + max(relative_delta * best, absolute_us)`.
+Set either pruning policy to `None` to disable that round's pruning while still
+measuring it. The old percentage-only delta and runtime-exemption options are
+replaced by these independent policies.
 
-Quick GPU jobs reuse one input set across their configurations. Warmup and
-repeated launches can mutate these inputs; evaluation uses fresh original inputs.
-`quick_benchmark_variants_per_job` defaults to 256 and
-`quick_benchmark_max_concurrent_jobs` to four, reserving up to four GPUs.
+The GPU builds independent sets until their logical tensor footprint exceeds its
+reported L2 size. Shared storages are counted conservatively once. This is an
+allocation and scheduling contract, not a guarantee of cache eviction: kernels
+may access only a subset, and resets can warm cache lines. The user must generate
+inputs that exercise the intended working set. Ring allocation and graph padding
+are bounded by `max_input_sets` (65,536) and `max_ring_bytes` (8 GiB); exceeding
+limits fails clearly. Reports include the ring footprint and allocation size.
 
-The optional `evaluate(candidate, *args, **kwargs) -> bool` runs remotely whenever
-a result would establish a new best. `candidate` is an ordinary callable fixed
-to one configuration and the current grid; compiled constexpr values cannot
-change. Only a passing evaluation updates the best. Evaluator exceptions or
-non-boolean returns fail the phase. Without an evaluator, correctness is assumed.
-Without a valid best, the phase fails rather than returning a winner.
+Pilot groups (eight variants by default) enqueue 100 L2 zeroing operations, then
+interleave five single-launch event trials per variant, rotating inputs without
+intermediate cache flushes. Synchronize once, take minima, and validate proposed
+new bests before using them for pruning. All pilot groups finish before survivors
+are regrouped. Refinement uses `ceil(10_000 / pilot_us)` launches per variant when
+at least ten are required, returning each minimum. Reset runs outside timed
+intervals. Refined pruning uses a validated best; every survivor passes the
+optional evaluator before final timing. Without an evaluator correctness is assumed.
 
-Quick input transport currently supports PyTorch tensors: `torch.save` snapshots
-preserve strides and shared storage, and load onto the job's assigned GPU. Grid
-and evaluator callbacks must be ordinary Python functions. Their code and Python
-helpers are transported without requiring the author's module remotely. Use the
-provided inputs instead of capturing CUDA tensors in callbacks.
+Final timing handles one configuration at a time. Set
+`Z = max(1, min(100, floor(1_000 / refined_us)))`. For `Z >= 10`, capture Z calls
+per graph and measure `ceil(25_000 / (Z * refined_us))` replays. Cycle distinct
+graphs spanning the ring because CUDA graphs fix input pointers. Pad to whole
+graphs so every captured call uses a distinct slot within its graph; this also
+allows resets outside replay timing. Return the minimum event duration divided
+by Z. For `Z < 10`, use direct events for
+`max(25, ceil(25_000 / refined_us))` launches. Both paths begin with 100 L2 flushes;
+final results include their trials and timing method.
 
-Omitting `tuning` compiles only. `TritonTuning(quick_benchmark_delta=None)` skips
-quick benchmarking and evaluation. Successful quick benchmarking also stops at
-the full-benchmark boundary. These paths raise `TritonExecutionNotImplementedError`
-with a report; full benchmarking, replication, final selection and execution
-are deferred. `TritonQuickBenchmarkError` covers a failed GPU phase or no valid
-best; `TritonCompilationError` retains compilation failures.
+Initial shards report all candidates and their final timings. Client reduction
+applies refined pruning against the global best, then schedules only surviving
+configurations for additional final-only measurements. Every completed replica
+must report a different physical GPU UUID. The initial measurement counts toward
+`replication_factor` (three by default); final ranking uses the arithmetic mean.
+After each replica shard completes, partial means are reduced and pruned again;
+this is a heuristic, and partial results are never selected as completed winners.
+Replication is also re-evaluated for correctness on each device.
 
-Install Triton on the client separately. The execution image must have the same
-version and support the selected hardware, with PyTorch for quick benchmarking.
-Runtime scalar/alignment specialization remains conservative. Tensor descriptors,
-nested runtime arguments and non-scalar constexpr values are not supported yet.
-The adapter probes old `ASTSource(constants=...)` and new
-`ASTSource(constexprs=...)` interfaces; live qualification covers Triton 3.8.0 /
-GB300. Other versions require qualification. See
-[examples/triton_compile.py](examples/triton_compile.py).
+The public vFunc scheduler selects a GPU model but has no device-exclusion field.
+Replica Calls therefore reserve `replication_factor` GPUs on one worker and
+measure their distinct device UUIDs separately. Devices already represented in
+that candidate's measurements are skipped. This avoids repeatedly scheduling
+single-GPU retries onto the same available device. Each final-only shard requires
+that many free GPUs on one worker; current GB300 trays have four GPUs, so higher
+replication factors require a worker with more GPUs. Calls are bounded by the
+normal capacity deadline and `replication_max_attempts`. Failed capacity or lack
+of enough distinct devices raises `TritonBenchmarkError` with retained reports
+and Call IDs. Generic single-device dispatch also verifies identities and never
+counts duplicate UUID placements as independent replicas.
+
+`quick_benchmark_variants_per_job` defaults to 256 and GPU concurrency to four;
+these are configurable batching limits. All phases reuse existing App/Image/
+Function settings and CPU-prepared artifacts; no service deployment is required.

@@ -1,11 +1,10 @@
-"""Normal Triton launch syntax backed by CPU-only batch compilation."""
+"""Normal Triton launch syntax backed by batch compilation and replicated tuning."""
 
 from __future__ import annotations
 
 import copy
 import hashlib
 import inspect
-import io
 import json
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
@@ -22,7 +21,9 @@ from .triton_compat import (
     source_bundle,
     validate_kernel,
 )
+from .triton_inputs import capture_inputs
 from .triton_policy import TritonTuning, portable_callable
+from .triton_replication import benchmark_shards
 
 
 class TritonCompilationError(GfaasError):
@@ -64,13 +65,12 @@ class _IncompleteCompilerReportError(GfaasError):
 
 
 class TritonKernel:
-    """Compile native configurations and optionally quick-benchmark in the active context.
+    """Compile native configurations and optionally return replicated benchmark reports.
 
-    Calls capture ``with app.function(...)`` settings. Normal execution and full
-    benchmarking are deferred; their boundary raises an error exposing reports
-    and all Call IDs. Compile-only calls never evaluate the grid or send tensor
-    contents. Quick benchmarking sends input snapshots and evaluates its grid
-    and optional correctness callback on the remote GPU.
+    Calls capture ``with app.function(...)`` settings. With tuning, generated GPU
+    inputs replace tensor transport and calls return a report; ordinary execution
+    is deferred. Without tuning, compilation completes and raises the existing
+    execution-boundary error. Generators and in-place reset callbacks are required.
     """
 
     compiler: Function
@@ -81,12 +81,17 @@ class TritonKernel:
         self,
         kernel: Any,
         *,
+        make_inputs: Any,
+        reset_inputs: Any,
         tuning: TritonTuning | None = None,
         variants_per_job: int | None = None,
         max_concurrent_jobs: int = 8,
         cache_compression_level: int = 1,
     ) -> None:
         validate_kernel(kernel)
+        if not callable(make_inputs) or not callable(reset_inputs):
+            raise TypeError("make_inputs and reset_inputs must be callable")
+        self.make_inputs, self.reset_inputs = make_inputs, reset_inputs
         if variants_per_job is not None and variants_per_job < 1:
             raise ValueError("Invalid variants per compiler job")
         if not 1 <= max_concurrent_jobs <= 32:
@@ -113,7 +118,7 @@ class TritonKernel:
         return max(1, min(32, (self.compiler.cpu_millicores or 1000) // 1000))
 
     def __getitem__(self, grid: Any) -> Any:
-        def launch(*args: Any, **kwargs: Any) -> None:
+        def launch(*args: Any, **kwargs: Any) -> Any:
             scope = active_function_scope()
             invocation = copy.copy(self)
             invocation.compiler = scope.bind(triton_compiler_runner.compile_batch)
@@ -157,11 +162,11 @@ class TritonKernel:
             if not 1000 <= (invocation.compiler.cpu_millicores or 0) <= 32000:
                 raise ValueError("Compiler CPU budget must be between 1000 and 32000 millicores")
             invocation.grid = grid
-            invocation._compile(args, kwargs)
+            return invocation._compile(args, kwargs)
 
         return launch
 
-    def _compile(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    def _compile(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         import triton  # type: ignore[import-not-found]
 
         jit, configs = validate_kernel(self.kernel)  # Revalidate mutable wrappers at invocation.
@@ -233,17 +238,19 @@ class TritonKernel:
         source = source_bundle(jit)
         import cloudpickle
 
-        payload = None
-        callbacks = None
-        if self.tuning is not None and self.tuning.quick_benchmark_delta is not None:
-            import torch  # type: ignore[import-not-found]
-
-            buffer = io.BytesIO()
-            torch.save((args, argument_kwargs), buffer)
-            payload = buffer.getvalue()
-            callbacks = cloudpickle.dumps(
-                (portable_callable(self.grid), portable_callable(self.tuning.evaluate))
+        metadata = capture_inputs(args, argument_kwargs) if self.tuning is not None else None
+        callbacks = (
+            cloudpickle.dumps(
+                (
+                    portable_callable(self.grid),
+                    portable_callable(self.tuning.evaluate),
+                    portable_callable(self.make_inputs),
+                    portable_callable(self.reset_inputs),
+                )
             )
+            if self.tuning is not None
+            else None
+        )
         probe = self.gpu_function.spawn()
         target = probe.wait()
         if not isinstance(target, dict) or target.get("backend") != "cuda":
@@ -259,115 +266,32 @@ class TritonKernel:
         compile_ids = report.get("call_ids", [call_id])
         report["call_ids"] = [probe.call_id, *compile_ids]
         report["target_probe_call_id"] = probe.call_id
-        report["next_phase"] = "full_benchmark" if self.tuning is not None else "execution"
-        if payload is not None:
+        report["next_phase"] = "execution"
+        if self.tuning is not None:
             artifacts = []
             for identity in compile_ids:
                 result = self.compiler.app.client.get_call_result(identity)
                 output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
                 artifacts.append(ArtifactRef(output["artifact_id"]))
-            benchmark = replace(self.gpu_function, handler=triton_quick_runner.quick_benchmark)
-            assert self.tuning is not None and self.tuning.quick_benchmark_delta is not None
-            report["quick_benchmark"] = self._quick_shards(
+            benchmark = replace(self.gpu_function, handler=triton_quick_runner.benchmark_cycle)
+            report["benchmark"] = benchmark_shards(
                 benchmark,
-                source,
-                jit.fn.__name__,
                 variants,
-                artifacts,
-                payload,
-                callbacks,
-                target,
-                triton.__version__,
+                {
+                    "source": source,
+                    "kernel_name": jit.fn.__name__,
+                    "artifacts": artifacts,
+                    "metadata": metadata,
+                    "callbacks": callbacks,
+                    "target": target,
+                    "triton_version": triton.__version__,
+                    "policy": self.tuning.request(),
+                },
+                self.tuning,
                 report["call_ids"],
             )
-            if report["quick_benchmark"]["status"] != "passed":
-                raise TritonQuickBenchmarkError(report, call_id or probe.call_id)
+            return report
         raise TritonExecutionNotImplementedError(report, call_id)
-
-    def _quick_shards(
-        self,
-        benchmark: Function,
-        source: str,
-        kernel_name: str,
-        variants: list[dict[str, Any]],
-        artifacts: list[ArtifactRef],
-        payload: bytes,
-        callbacks: bytes | None,
-        target: dict[str, Any],
-        version: str,
-        call_ids: list[str],
-    ) -> dict[str, Any]:
-        policy = self.tuning
-        assert policy is not None and policy.quick_benchmark_delta is not None
-        count = (
-            len(variants) + policy.quick_benchmark_variants_per_job - 1
-        ) // policy.quick_benchmark_variants_per_job
-        chunks = [variants[i::count] for i in range(count)]
-
-        def run(chunk: list[dict[str, Any]]) -> dict[str, Any]:
-            identity = None
-            try:
-                result = benchmark.spawn(
-                    source=source,
-                    kernel_name=kernel_name,
-                    variants=json.dumps(chunk),
-                    artifacts=artifacts,
-                    inputs=payload,
-                    callbacks=callbacks,
-                    target=target,
-                    triton_version=version,
-                    delta=policy.quick_benchmark_delta,
-                    minimum_us=policy.pruning_min_runtime_us,
-                    group_size=policy.quick_benchmark_group_size,
-                )
-                identity = result.call_id
-                shard = result.wait()
-                if (
-                    not isinstance(shard, dict)
-                    or not isinstance(shard.get("results"), list)
-                    or {r["id"] for r in shard["results"]} != {v["id"] for v in chunk}
-                    or len(shard["results"]) != len(chunk)
-                ):
-                    raise GfaasError("Incomplete quick benchmark shard report")
-                return {"call_id": identity, "report": shard}
-            except Exception as error:
-                return {
-                    "call_id": identity,
-                    "report": {
-                        "status": "failed",
-                        "job_failed": True,
-                        "diagnostics": str(error),
-                        "results": [{"id": v["id"], "status": "shard_failed"} for v in chunk],
-                    },
-                }
-
-        with ThreadPoolExecutor(
-            max_workers=min(count, policy.quick_benchmark_max_concurrent_jobs)
-        ) as pool:
-            shards = list(pool.map(run, chunks))
-        call_ids.extend(s["call_id"] for s in shards if s["call_id"])
-        measured = {r["id"]: r for s in shards for r in s["report"]["results"]}
-        rows = [measured[v["id"]] for v in variants]
-        accepted = [s["report"] for s in shards if s["report"].get("best_id") is not None]
-        winner = min(accepted, key=lambda s: s["best_runtime_us"]) if accepted else None
-        best_us = winner["best_runtime_us"] if winner else None
-        return {
-            "schema": "vfunc.triton-quick-batch/v1",
-            "status": "passed"
-            if winner and not any(s["report"].get("job_failed") for s in shards)
-            else "failed",
-            "results": rows,
-            "best_id": winner["best_id"] if winner else None,
-            "best_runtime_us": best_us,
-            "retained_ids": triton_quick_runner.select_rows(
-                rows, best_us, policy.quick_benchmark_delta, policy.pruning_min_runtime_us
-            ),
-            "quick_benchmark_delta": policy.quick_benchmark_delta,
-            "pruning_min_runtime_us": policy.pruning_min_runtime_us,
-            "evaluation_enabled": policy.evaluate is not None,
-            "timing_method": "Interleaved CUDA events: 5-trial pilot, 2x pruning, regrouped 10 ms minimum; 100 preflushes per group",
-            "shards": shards,
-        }
 
     def _dispatch(
         self,
@@ -465,7 +389,7 @@ class TritonKernel:
                 "workers_per_job": self._workers,
             }
         failed = any(row["status"] != "compiled" for row in report["results"])
-        quick_enabled = self.tuning is not None and self.tuning.quick_benchmark_delta is not None
+        quick_enabled = self.tuning is not None
         structural = report.get("job_failed") or any(
             s["report"].get("job_failed") for s in report.get("shards", [])
         )

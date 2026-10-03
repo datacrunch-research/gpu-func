@@ -15,10 +15,10 @@ from gfaas.triton_policy import portable_callable
 @pytest.mark.parametrize(
     "options",
     [
-        dict(quick_benchmark_delta=-1),
-        dict(quick_benchmark_delta=float("nan")),
-        dict(pruning_min_runtime_us=-1),
-        dict(pruning_min_runtime_us=float("inf")),
+        dict(pilot_pruning=-1),
+        dict(refined_pruning=float("nan")),
+        dict(replication_factor=-1),
+        dict(max_ring_bytes=float("inf")),
         dict(evaluate=1),
         dict(quick_benchmark_group_size=0),
         dict(quick_benchmark_variants_per_job=0),

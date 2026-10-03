@@ -17,12 +17,12 @@ from pathlib import Path
 from typing import Any
 
 
-def probe_target() -> dict[str, Any]:
+def probe_target(device_index: int = 0) -> dict[str, Any]:
     cuda = ctypes.CDLL("libcuda.so.1")
     device, major, minor = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
     for name, args in (
         ("cuInit", (0,)),
-        ("cuDeviceGet", (ctypes.byref(device), 0)),
+        ("cuDeviceGet", (ctypes.byref(device), device_index)),
         ("cuDeviceComputeCapability", (ctypes.byref(major), ctypes.byref(minor), device)),
     ):
         status = getattr(cuda, name)(*args)
@@ -129,7 +129,7 @@ def l2_flush_buffer(torch: Any) -> Any:
     cuda = ctypes.CDLL("libcuda.so.1")
     size = ctypes.c_int()
     # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE. The job exposes one device.
-    status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, 0)
+    status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, torch.cuda.current_device())
     if status or size.value <= 0:
         raise RuntimeError("Cannot determine GPU L2 cache size")
     return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
@@ -407,3 +407,417 @@ def quick_benchmark(
         "pilot_pruning_factor": 2,
         "l2_flush_bytes": flush.numel() * flush.element_size(),
     }
+
+
+def pruning_limit(best: float, policy: dict[str, float] | None) -> float:
+    if policy is None:
+        return math.inf
+    return best + max(best * policy["relative_delta"], policy["absolute_us"])
+
+
+def prune_timings(
+    rows: list[dict[str, Any]], field: str, policy: dict[str, float] | None
+) -> list[str]:
+    valid = [r for r in rows if r.get("status") == "measured"]
+    if not valid:
+        return []
+    limit = pruning_limit(min(r[field] for r in valid), policy)
+    return [r["id"] for r in valid if r[field] <= limit]
+
+
+class InputRing:
+    """Independent CUDA storage; factory metadata and aliasing are checked per set."""
+
+    def __init__(
+        self,
+        factory: Any,
+        reset: Any,
+        metadata: dict[str, Any],
+        torch: Any,
+        l2_bytes: int,
+        max_sets: int,
+        max_bytes: int,
+    ) -> None:
+        self.factory, self.reset, self.metadata, self.torch = factory, reset, metadata, torch
+        self.max_sets, self.max_bytes = max_sets, max_bytes
+        self.sets: list[Any] = []
+        self.pointers: set[int] = set()
+        self.allocated_bytes = 0
+        self.cursor = 0
+        self.footprint_bytes: int = 0
+        self.append()
+        count = l2_bytes // self.footprint_bytes + 1
+        self.ensure(count)
+
+    def append(self) -> None:
+        if len(self.sets) >= self.max_sets:
+            raise ValueError(
+                "Input ring exceeds max_input_sets; use larger input sets or raise the limit"
+            )
+        import copy
+
+        result = self.factory(copy.deepcopy(self.metadata))
+        if (
+            not isinstance(result, tuple)
+            or len(result) != 2
+            or not isinstance(result[0], tuple)
+            or not isinstance(result[1], dict)
+        ):
+            raise TypeError("make_inputs must return (args_tuple, kwargs_dict)")
+        args, kwargs = result
+        if (
+            len(args) != len(self.metadata["args"])
+            or kwargs.keys() != self.metadata["kwargs"].keys()
+        ):
+            raise ValueError("Generated arguments do not match captured input metadata")
+        groups: dict[int, int] = {}
+        allocations: dict[int, int] = {}
+        logical: dict[int, int] = {}
+        values = list(zip(args, self.metadata["args"], strict=True))
+        values += [(kwargs[k], spec) for k, spec in self.metadata["kwargs"].items()]
+        for value, spec in values:
+            if spec["kind"] == "value":
+                if type(value) is not type(spec["value"]) or value != spec["value"]:
+                    raise ValueError("Generated scalar differs from captured metadata")
+                continue
+            if not isinstance(value, self.torch.Tensor) or value.device.type != "cuda":
+                raise ValueError("make_inputs must generate CUDA tensors on the assigned device")
+            if value.device.index != self.torch.cuda.current_device():
+                raise ValueError("Generated tensor is on another GPU")
+            if (
+                list(value.shape) != spec["shape"]
+                or list(value.stride()) != spec["stride"]
+                or str(value.dtype).removeprefix("torch.") != spec["dtype"]
+                or value.storage_offset() != spec["storage_offset"]
+                or value.requires_grad
+            ):
+                raise ValueError(
+                    "Generated tensor shape, stride, dtype, offset or gradient mode differs"
+                )
+            pointer = value.untyped_storage().data_ptr()
+            group = spec["storage_group"]
+            if group in groups and groups[group] != pointer:
+                raise ValueError("Generated tensors do not preserve input storage aliasing")
+            if group not in groups and pointer in groups.values():
+                raise ValueError("Generated tensors introduce storage aliasing")
+            groups[group] = pointer
+            allocations[pointer] = value.untyped_storage().nbytes()
+            logical[pointer] = max(logical.get(pointer, 0), value.numel() * value.element_size())
+        footprint = sum(logical.values())
+        if footprint <= 0 or self.pointers.intersection(groups.values()):
+            raise ValueError("Input sets must contain nonempty, independent CUDA storage")
+        if self.sets and footprint != self.footprint_bytes:
+            raise ValueError("Input set footprints differ")
+        if self.allocated_bytes + sum(allocations.values()) > self.max_bytes:
+            raise ValueError("Input ring exceeds max_ring_bytes")
+        self.footprint_bytes = footprint
+        self.allocated_bytes += sum(allocations.values())
+        self.pointers.update(groups.values())
+        self.sets.append(result)
+
+    def ensure(self, count: int) -> None:
+        if count > self.max_sets:
+            raise ValueError("Input ring exceeds max_input_sets")
+        while len(self.sets) < count:
+            self.append()
+
+    def next(self) -> Any:
+        result = self.sets[self.cursor % len(self.sets)]
+        self.cursor += 1
+        return result
+
+    def fresh(self) -> Any:
+        fresh = InputRing(self.factory, self.reset, self.metadata, self.torch, 0, 1, self.max_bytes)
+        if self.pointers.intersection(fresh.pointers):
+            raise ValueError("Evaluation inputs share benchmark-ring storage")
+        args, kwargs = fresh.sets[0]
+        self.reset(*args, **kwargs)
+        return args, kwargs
+
+
+def ring_trials(
+    candidates: list[Any], counts: list[int], ring: InputRing, torch: Any, flush: Any
+) -> list[list[float]]:
+    for _ in range(100):
+        flush.zero_()
+    events: list[list[Any]] = [[] for _ in candidates]
+    for iteration in range(max(counts)):
+        for index, candidate in enumerate(candidates):
+            if iteration >= counts[index]:
+                continue
+            args, kwargs = ring.next()
+            ring.reset(*args, **kwargs)
+            start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+            start.record()
+            candidate(*args, **kwargs)
+            end.record()
+            events[index].append((start, end))
+    torch.cuda.synchronize()
+    return [[s.elapsed_time(e) * 1000 for s, e in pairs] for pairs in events]
+
+
+def final_benchmark(
+    candidate: Any, estimate_us: float, ring: InputRing, torch: Any, flush: Any
+) -> dict[str, Any]:
+    z = max(1, min(100, math.floor(1000 / estimate_us)))
+    if z < 10:
+        count = max(25, math.ceil(25_000 / estimate_us))
+        trials = ring_trials([candidate], [count], ring, torch, flush)[0]
+        return {
+            "runtime_us": min(trials),
+            "trial_us": trials,
+            "method": "events-ring",
+            "calls_per_graph": 0,
+            "iterations": count,
+        }
+    # Graph pointers cannot advance at replay time. Pad the ring to whole graphs,
+    # then cycle distinct graphs so no replay continually reuses a small subset.
+    ring.ensure(math.ceil(len(ring.sets) / z) * z)
+    graphs: list[Any] = []
+    torch.cuda.synchronize()
+    capture_stream = torch.cuda.Stream()
+    capture_stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(capture_stream):
+        for args, kwargs in ring.sets:
+            ring.reset(*args, **kwargs)
+            candidate(*args, **kwargs)
+    capture_stream.synchronize()
+    pool = torch.cuda.graph_pool_handle()
+    for offset in range(0, len(ring.sets), z):
+        sets = ring.sets[offset : offset + z]
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, stream=capture_stream, pool=pool):
+            for args, kwargs in sets:
+                candidate(*args, **kwargs)
+        graphs.append((graph, sets))
+    torch.cuda.current_stream().wait_stream(capture_stream)
+    torch.cuda.synchronize()
+    count = max(1, math.ceil(25_000 / (z * estimate_us)))
+    for _ in range(100):
+        flush.zero_()
+    events = []
+    for index in range(count):
+        graph, sets = graphs[index % len(graphs)]
+        for args, kwargs in sets:
+            ring.reset(*args, **kwargs)
+        start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
+        start.record()
+        graph.replay()
+        end.record()
+        events.append((start, end))
+    torch.cuda.synchronize()
+    trials = [s.elapsed_time(e) * 1000 / z for s, e in events]
+    return {
+        "runtime_us": min(trials),
+        "trial_us": trials,
+        "method": "cudagraphs-ring",
+        "calls_per_graph": z,
+        "graph_count": len(graphs),
+        "iterations": count,
+    }
+
+
+def benchmark_cycle(
+    *,
+    source: str,
+    kernel_name: str,
+    variants: str,
+    artifacts: list[Any],
+    metadata: dict[str, Any],
+    callbacks: bytes,
+    target: dict[str, Any],
+    triton_version: str,
+    policy: dict[str, Any],
+    final_only: bool = False,
+    excluded_gpu_uuids: list[str] | None = None,
+    estimates: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    import cloudpickle
+    import torch
+    import triton
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    if probe_target(torch.cuda.current_device()) != target or triton.__version__ != triton_version:
+        raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
+    torch.cuda.init()
+    gpu_uuid = str(
+        getattr(torch.cuda.get_device_properties(torch.cuda.current_device()), "uuid", "") or ""
+    )
+    if not gpu_uuid:
+        raise RuntimeError("GPU UUID is required to verify independent replication")
+    if gpu_uuid in (excluded_gpu_uuids or []):
+        return {"status": "duplicate_gpu", "gpu_uuid": gpu_uuid, "results": []}
+    grid, evaluate, factory, reset = cloudpickle.loads(callbacks)
+    variants_list = json.loads(variants)
+    rows: list[dict[str, Any]] = []
+    flush = l2_flush_buffer(torch)
+    ring = InputRing(
+        factory,
+        reset,
+        metadata,
+        torch,
+        flush.numel() // 2,
+        policy["max_input_sets"],
+        policy["max_ring_bytes"],
+    )
+    with tempfile.TemporaryDirectory(prefix="vfunc-ring-") as folder:
+        cache = Path(folder) / "cache"
+        cache.mkdir()
+        prepared = restore_caches(artifacts, cache, source, target, triton_version)
+        os.environ["TRITON_CACHE_DIR"] = str(cache)
+        if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
+            triton.knobs.cache.dir = str(cache)
+        path = Path(folder) / "compile_source.py"
+        path.write_text(source)
+        name = "vfunc_compile_" + hashlib.sha256(source.encode()).hexdigest()[:16]
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        jit = getattr(module, kernel_name)
+        signature = inspect.signature(jit.fn)
+        modern = "constexprs" in inspect.signature(ASTSource).parameters
+        entries = []
+        for variant in variants_list:
+            row = {"id": variant["id"]}
+            rows.append(row)
+            if prepared.get(row["id"], {}).get("status") != "compiled":
+                row["status"] = "compile_failed"
+                continue
+            kinds, constants = variant["signature"], variant["constants"]
+            ast = (
+                ASTSource(jit, kinds, constexprs=constants)
+                if modern
+                else ASTSource(
+                    jit,
+                    {jit.arg_names.index(n): k for n, k in kinds.items() if k != "constexpr"},
+                    constants={jit.arg_names.index(n): v for n, v in constants.items()},
+                )
+            )
+
+            def snapshot() -> dict[str, Any]:
+                return {
+                    str(p): (p.stat().st_mtime_ns, p.stat().st_size)
+                    for p in cache.rglob("*")
+                    if p.is_file() and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
+                }
+
+            before = snapshot()
+            compiled = triton.compile(ast, target=GPUTarget(**target), options=variant["options"])
+            if before != snapshot() or compiled.hash != prepared[row["id"]]["cache_hash"]:
+                raise RuntimeError("GPU preparation recompiled or changed a CPU-prepared variant")
+            row["prepared_files_unchanged"] = True
+            candidate = bound_candidate(compiled, constants, variant["options"], signature, grid)
+            args, kwargs = ring.next()
+            reset(*args, **kwargs)
+            candidate(*args, **kwargs)
+            torch.cuda.synchronize()
+            entries.append((row, candidate))
+
+        def check(row: dict[str, Any], candidate: Any) -> bool:
+            if evaluate is None:
+                row["evaluation"] = "skipped"
+                return True
+            args, kwargs = ring.fresh()
+            verdict = evaluate(candidate, *args, **kwargs)
+            torch.cuda.synchronize()
+            if type(verdict) is not bool:
+                raise TypeError("evaluate must return a bool")
+            row["evaluation"] = "passed" if verdict else "failed"
+            if not verdict:
+                row["status"] = "invalid"
+            return verdict
+
+        if not final_only:
+            best = None
+            for offset in range(0, len(entries), policy["group_size"]):
+                group = entries[offset : offset + policy["group_size"]]
+                values = ring_trials([c for _, c in group], [5] * len(group), ring, torch, flush)
+                for (row, candidate), trials in zip(group, values, strict=True):
+                    runtime = min(trials)
+                    if not math.isfinite(runtime) or runtime <= 0:
+                        raise RuntimeError("Invalid pilot timing")
+                    row.update(status="measured", pilot_us=runtime, pilot_trial_us=trials)
+                    if (best is None or runtime < best) and check(row, candidate):
+                        best = runtime
+            keep = set(prune_timings(rows, "pilot_us", policy["pilot_pruning"]))
+            survivors = [(r, c) for r, c in entries if r["id"] in keep]
+            for row, _ in entries:
+                if row["status"] == "measured" and row["id"] not in keep:
+                    row["status"] = "pilot_pruned"
+            for offset in range(0, len(survivors), policy["group_size"]):
+                group = survivors[offset : offset + policy["group_size"]]
+                counts = [math.ceil(10_000 / r["pilot_us"]) for r, _ in group]
+                active = [(r, c, n) for (r, c), n in zip(group, counts, strict=True) if n >= 10]
+                for (row, _), n in zip(group, counts, strict=True):
+                    if n < 10:
+                        row.update(
+                            refined_us=row["pilot_us"], refined_trial_us=row["pilot_trial_us"]
+                        )
+                if active:
+                    values = ring_trials(
+                        [c for _, c, _ in active], [n for _, _, n in active], ring, torch, flush
+                    )
+                    for (row, _, n), trials in zip(active, values, strict=True):
+                        row.update(
+                            refined_us=min(trials), refined_trial_us=trials, refinement_iterations=n
+                        )
+            # Validate the proposed refined best before it can prune any peers.
+            refined_evaluated = set()
+            for row, candidate in sorted(survivors, key=lambda pair: pair[0]["refined_us"]):
+                refined_evaluated.add(row["id"])
+                if check(row, candidate):
+                    break
+            keep = set(prune_timings(rows, "refined_us", policy["refined_pruning"]))
+            for row, candidate in survivors:
+                if row["status"] != "measured":
+                    continue
+                if row["id"] not in keep:
+                    row["status"] = "refined_pruned"
+                elif row["id"] not in refined_evaluated and not check(row, candidate):
+                    continue
+        for row, candidate in entries:
+            if final_only:
+                row["status"] = "measured"
+                if not check(row, candidate):
+                    continue
+                estimate = (estimates or {})[row["id"]]
+            elif row.get("status") == "measured":
+                estimate = row["refined_us"]
+            else:
+                continue
+            if not math.isfinite(estimate) or estimate <= 0:
+                raise RuntimeError("Invalid refined runtime")
+            final = final_benchmark(candidate, estimate, ring, torch, flush)
+            if not math.isfinite(final["runtime_us"]) or final["runtime_us"] <= 0:
+                raise RuntimeError("Invalid final runtime")
+            row.update(runtime_us=final["runtime_us"], final=final)
+        valid = [r for r in rows if r["status"] == "measured"]
+        best_row = min(valid, key=lambda r: r["runtime_us"]) if valid else None
+        return {
+            "schema": "vfunc.triton-benchmark/v1",
+            "status": "passed" if valid else "failed",
+            "gpu_uuid": gpu_uuid,
+            "results": rows,
+            "best_id": best_row["id"] if best_row else None,
+            "best_runtime_us": best_row["runtime_us"] if best_row else None,
+            "ring_sets": len(ring.sets),
+            "ring_footprint_bytes": ring.footprint_bytes,
+            "ring_allocated_bytes": ring.allocated_bytes,
+            "l2_bytes": flush.numel() // 2,
+            "cache_assumption": "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic.",
+        }
+
+
+def benchmark_replicas(*, device_count: int, **kwargs: Any) -> dict[str, Any]:
+    import torch
+
+    if torch.cuda.device_count() < device_count:
+        raise RuntimeError("Replica Call did not receive its requested GPU count")
+    reports = []
+    for device in range(device_count):
+        with torch.cuda.device(device):
+            reports.append(benchmark_cycle(**kwargs))
+    return {"status": "replica_bundle", "replica_reports": reports}

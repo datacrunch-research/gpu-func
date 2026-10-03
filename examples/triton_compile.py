@@ -19,13 +19,21 @@ def add(X, Y, N: tl.constexpr, BLOCK: tl.constexpr):
     tl.store(Y + offsets, x + 1, offsets < N)
 
 
+def make_inputs(metadata):
+    raise RuntimeError("This example only compiles; input generation is unused")
+
+
+def reset_inputs(*args, **kwargs):
+    pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="registered image matching local Triton")
     parser.add_argument("--gpu", default="gb300")
     args = parser.parse_args()
     app = vfunc.App("triton-compile", image=vfunc.Image(args.image))
-    kernel = vfunc.TritonKernel(add)
+    kernel = vfunc.TritonKernel(add, make_inputs=make_inputs, reset_inputs=reset_inputs)
     x = torch.empty(1024)  # CPU tensors suffice: only argument metadata is sent.
     out = torch.empty_like(x)
     try:

@@ -14,10 +14,24 @@ from gfaas import (
     Image,
     TritonCompilationError,
     TritonExecutionNotImplementedError,
-    TritonKernel,
     UnsupportedTritonKernelError,
 )
+from gfaas import (
+    TritonKernel as NativeTritonKernel,
+)
 from gfaas.errors import GfaasError
+
+
+def make_inputs(metadata):
+    return (), {}
+
+
+def reset_inputs(*args, **kwargs):
+    pass
+
+
+def TritonKernel(*args, **kwargs):
+    return NativeTritonKernel(*args, make_inputs=make_inputs, reset_inputs=reset_inputs, **kwargs)
 
 
 def add(X, N, BLOCK):
@@ -427,116 +441,61 @@ def test_context_required_and_image_override_is_resolved_at_invocation():
         kernel[(1,)](None, 1, 64)
 
 
-def test_optional_delta_skips_quick_benchmark_and_evaluation():
-    import gfaas
-
+def test_compile_only_does_not_upload_inputs():
     client = Client()
-    kernel = TritonKernel(
-        JIT(add), tuning=gfaas.TritonTuning(evaluate=lambda *_: pytest.fail("eval ran"))
-    )
-    app = App("skip", image=Image("compiler"), client=client)
-    with app.function(gpu="gb300"), pytest.raises(TritonExecutionNotImplementedError) as outcome:
+    kernel = TritonKernel(JIT(add))
+    with (
+        App("compile", image=Image("compiler"), client=client).function(gpu="gb300"),
+        pytest.raises(TritonExecutionNotImplementedError) as outcome,
+    ):
         kernel[(1,)](None, 1, 64)
-    assert outcome.value.report["next_phase"] == "full_benchmark"
-    assert "quick_benchmark" not in outcome.value.report
-    assert client.submission["function"].__name__ == "compile_batch"
+    assert "benchmark" not in outcome.value.report
 
 
-def test_quick_gpu_phase_receives_context_input_snapshot_and_compiler_artifacts(monkeypatch):
+def test_benchmark_gpu_phase_receives_metadata_and_compiler_artifacts():
     import cloudpickle
 
     import gfaas
 
-    fake_torch = ModuleType("torch")
-    fake_torch.save = lambda inputs, buffer: buffer.write(b"snapshot")
-    monkeypatch.setitem(sys.modules, "torch", fake_torch)
-
-    class QuickClient(Client):
+    class BenchmarkClient(Client):
         def submit(self, **kwargs):
-            if kwargs["function"].__name__ == "quick_benchmark":
-                self.quick_request = kwargs
+            if kwargs["function"].__name__ == "benchmark_cycle":
+                self.benchmark_request = kwargs
                 variants = json.loads(kwargs["kwargs"]["variants"])
                 report = {
                     "status": "passed",
-                    "best_id": variants[0]["id"],
-                    "best_runtime_us": 10,
+                    "gpu_uuid": "gpu_0",
                     "results": [
-                        {"id": v["id"], "status": "measured", "runtime_us": 10} for v in variants
+                        {"id": v["id"], "status": "measured", "runtime_us": 10, "refined_us": 11}
+                        for v in variants
                     ],
                 }
-                return SimpleNamespace(call_id="call_quick", wait=lambda: report)
+                return SimpleNamespace(call_id="call_benchmark", wait=lambda: report)
             return super().submit(**kwargs)
 
         def get_call_result(self, identity):
             assert identity == "call_test"
             return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_compiled"}]}
 
-    client = QuickClient()
-    kernel = TritonKernel(
-        JIT(add), tuning=gfaas.TritonTuning(quick_benchmark_delta=0.15, pruning_min_runtime_us=50)
-    )
-    app = App("quick", image=Image("compiler"), client=client)
-    with (
-        app.function(gpu="gb300", timeout=44, env={"A": "B"}),
-        pytest.raises(TritonExecutionNotImplementedError) as outcome,
-    ):
-        kernel[(1,)](None, 1, 64)
-    request = client.quick_request
+    client = BenchmarkClient()
+    kernel = TritonKernel(JIT(add), tuning=gfaas.TritonTuning(replication_factor=1))
+    app = App("benchmark", image=Image("compiler"), client=client)
+    with app.function(gpu="gb300", timeout=44, env={"A": "B"}):
+        report = kernel[(1,)](None, 1, 64)
+    request = client.benchmark_request
     assert request["gpu_count"] == 1 and request["gpu_type"] == "gb300"
     assert request["timeout_s"] == 44 and request["env"] == {"A": "B"}
     data = request["kwargs"]
-    assert data["inputs"] == b"snapshot" and data["artifacts"][0].artifact_id == "art_compiled"
-    assert data["delta"] == 0.15 and data["minimum_us"] == 50
-    assert cloudpickle.loads(data["callbacks"]) == ((1,), None)
-    assert outcome.value.call_ids == ["call_probe", "call_test", "call_quick"]
+    assert data["metadata"]["args"][0] == {"kind": "value", "value": None}
+    assert "inputs" not in data
+    assert data["artifacts"][0].artifact_id == "art_compiled"
+    assert cloudpickle.loads(data["callbacks"])[0] == (1,)
+    assert report["call_ids"] == ["call_probe", "call_test", "call_benchmark"]
+    assert report["benchmark"]["best_runtime_us"] == 10
 
 
-def test_quick_shards_gather_against_global_valid_best():
-    from gfaas import TritonTuning
-
-    variants = [{"id": str(i)} for i in range(5)]
-    times = {"0": 1, "1": 100, "2": 109, "3": 130, "4": 120}
-    chunks = []
-
-    class Benchmark:
-        def spawn(self, **kwargs):
-            chunk = json.loads(kwargs["variants"])
-            chunks.append([v["id"] for v in chunk])
-            rows = [
-                {
-                    "id": v["id"],
-                    "runtime_us": times[v["id"]],
-                    "status": "invalid" if v["id"] == "0" else "measured",
-                }
-                for v in chunk
-            ]
-            valid = [r for r in rows if r["status"] == "measured"]
-            best = min(valid, key=lambda r: r["runtime_us"])
-            return SimpleNamespace(
-                call_id="call_" + chunk[0]["id"],
-                wait=lambda: {
-                    "status": "passed",
-                    "results": rows,
-                    "best_id": best["id"],
-                    "best_runtime_us": best["runtime_us"],
-                },
-            )
-
-    kernel = TritonKernel(
-        JIT(add),
-        tuning=TritonTuning(
-            quick_benchmark_delta=0.10,
-            pruning_min_runtime_us=0,
-            quick_benchmark_variants_per_job=2,
-            quick_benchmark_max_concurrent_jobs=2,
-        ),
-    )
-    calls = []
-    report = kernel._quick_shards(
-        Benchmark(), "source", "add", variants, [], b"inputs", None, {}, "test", calls
-    )
-    assert sorted(chunks) == [["0", "3"], ["1", "4"], ["2"]]
-    assert report["best_id"] == "1"
-    assert report["retained_ids"] == ["1", "2"]
-    assert [r["id"] for r in report["results"]] == [str(i) for i in range(5)]
-    assert calls == ["call_0", "call_1", "call_2"]
+def test_generator_and_reset_are_required():
+    with pytest.raises(TypeError):
+        NativeTritonKernel(JIT(add))
+    with pytest.raises(TypeError, match="callable"):
+        NativeTritonKernel(JIT(add), make_inputs=None, reset_inputs=reset_inputs)
