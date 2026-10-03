@@ -45,6 +45,10 @@ __all__ = [
     "Image",
     "RemoteResult",
     "StageArtifactBinding",
+    "TritonKernel",
+    "UnsupportedTritonKernelError",
+    "TritonCompilationError",
+    "TritonExecutionNotImplementedError",
     "TritonCandidate",
     "TritonCase",
     "UnsupportedGpuPoolError",
@@ -67,6 +71,15 @@ def __getattr__(name: str):
         from .cuda import CudaSource, compile_and_run
 
         return {"CudaSource": CudaSource, "compile_and_run": compile_and_run}[name]
+    if name in {
+        "TritonKernel",
+        "UnsupportedTritonKernelError",
+        "TritonCompilationError",
+        "TritonExecutionNotImplementedError",
+    }:
+        from . import triton_kernel
+
+        return getattr(triton_kernel, name)
     if name in {"TritonCandidate", "TritonCase", "spawn_triton_tuning", "tune_triton"}:
         from .triton_tuning import (
             TritonCandidate,

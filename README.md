@@ -171,3 +171,85 @@ uv run pytest -q
 mdbook build docs
 mdbook test docs
 ```
+
+## Compile-only Triton wrapper
+
+```python
+import gfaas as vfunc
+
+app = vfunc.App("kernels", image=vfunc.Image("your-registered-triton-image"))
+kernel = vfunc.TritonKernel(
+    your_kernel, app=app, target_arch=103, cpu_millicores=16000,
+)
+
+try:
+    kernel[grid](a, b, out, M=m, N=n, K=k)
+except vfunc.TritonExecutionNotImplementedError as result:
+    print(result.call_ids, result.report)
+```
+
+`your_kernel` may be plain `@triton.jit` with one supplied configuration or vanilla
+`@triton.autotune` directly wrapping JIT. All declared unique configurations are
+compiled in CPU-only Calls with bounded parallelism. No kernel,
+benchmark, evaluator, or grid callable runs. Tensor contents are never uploaded.
+A successful call deliberately raises `TritonExecutionNotImplementedError` with
+its compilation report. Per-variant compiler failures raise
+`TritonCompilationError`, preserving the report and successful artifacts.
+Each Call retains the named `compiled-triton` output tree containing a packed cache
+archive and SHA-256 manifest. Packing avoids publishing each compiler cache file
+as a separate Artifact.
+
+The defaults use 16 CPU compiler threads per job, 4 GiB of memory per job,
+and at most eight concurrent jobs. Batches target 128 configurations per job;
+within one dispatch window, chunks can grow to 256 before adding another wave.
+For example, 1,024 configurations use eight jobs of 128, and 1,536 use eight jobs
+of 192. Small batches use one job and reserve at most one CPU core per variant.
+This can reserve up to 128 CPU cores and 32 GiB concurrently. Actual throughput
+depends on available service capacity.
+
+Environment and job settings use the existing `App`, `Image`, and `Function`
+configuration path. Compiler jobs inherit `app.image` and `app.client`; an
+`image=` override works like `@app.function(image=...)`. The wrapper forwards
+`gpu_type`, `cpu_millicores`, `memory_bytes`, `timeout`, `capacity_wait`, `env`,
+and storage/log/output limits through an ordinary CPU-only Function. The App
+owns the client. Compilation threads follow the CPU budget (one thread per
+whole core, up to 32), and small shards clamp their CPU reservation.
+
+Set `cpu_millicores`, `memory_bytes`, and `max_concurrent_jobs` to control that budget.
+An explicit `variants_per_job` sets a hard chunk limit instead of the automatic
+policy; setting it at least as large as your configuration set uses a single
+job. `cache_compression_level` defaults to 1 for faster lossless cache packing
+and accepts gzip levels 0–9. Higher compression reduces transfer size at the
+cost of packing time.
+
+Multi-job reports preserve original variant order and include `call_ids` and
+`shards`, with each shard's report and output name. Structural job failures stop
+further submissions; active jobs are awaited and their artifacts remain
+available. Individual variant failures are recorded without stopping other
+configurations. The wrapper leaves the App-owned client open for reuse.
+
+The report separates compiler imports, metadata decoding, source setup,
+compilation, cache hashing, packing, and cleanup. It also records CPU time and
+cache sizes. Configuration metadata travels as JSON, allowing large batches
+without exhausting the SDK's bounded Artifact reference inspection.
+
+Validation rejects additional wrappers/subclasses, heuristics, pruning,
+callbacks, reset/restore behavior, custom benchmarking, IR overrides, and
+unsupported launch modifiers before submission. Mutable wrappers are revalidated
+on each invocation. Inspectable source is reconstructed from kernel/helper
+functions and simple globals; importing the user's whole module remotely is
+avoided. Closure dependencies and unsupported source/argument forms fail clearly.
+Arbitrary Python source is not statically proven free of side effects.
+
+Install Triton separately in the client environment. The remote image must have
+the same Triton version and support the explicit GPU target. The compiler does not
+initialize CUDA. Runtime scalars and pointer alignment use conservative,
+unspecialized types; constexpr values retain their specified specialization.
+Metadata-rich tensor descriptors, nested runtime arguments, and non-scalar
+constexpr values are not implemented yet. This is a batch compiler on existing
+vFunc jobs, not a deployed persistent compiler service.
+
+The compatibility boundary probes `ASTSource` for the older `constants` interface
+or newer `constexprs` interface. Tests cover both contracts; live CPU compilation
+has been checked with Triton 3.8.0. Other releases require qualification before
+claiming production support. See [examples/triton_compile.py](examples/triton_compile.py).
