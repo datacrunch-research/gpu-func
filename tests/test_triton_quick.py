@@ -185,7 +185,7 @@ def test_quick_benchmark_invalid_fast_kernels_never_establish_pruning_reference(
 
 def test_quick_timing_order_flush_and_fastest_of_five():
     log = []
-    durations = iter([0.009, 0.003, 0.008, 0.004, 0.005])
+    durations = iter([9, 3, 8, 4, 5])
 
     roles = iter(["start", "end"] * 5)
 
@@ -208,6 +208,41 @@ def test_quick_timing_order_flush_and_fastest_of_five():
         lambda x, *, y: log.append(("call", x, y)), (1,), {"y": 2}, flush, torch
     )
     assert log[:3] == ["sync", ("call", 1, 2), "sync"]
-    assert log[3:-1] == ["start", ("call", 1, 2), "end", "flush"] * 5
-    assert log[-1] == "sync" and trials == [9, 3, 8, 4, 5]
-    assert min(trials) == 3
+    assert log[3:103] == ["flush"] * 100
+    assert log[103:-1] == ["start", ("call", 1, 2), "end", "flush"] * 5
+    assert log[-1] == "sync" and trials["trial_us"] == [9000, 3000, 8000, 4000, 5000]
+    assert trials["runtime_us"] == 3000
+    assert trials["refinement_iterations"] == 0
+
+
+def test_quick_refinement_uses_ten_ms_iteration_count_and_mean():
+    log = []
+    durations = iter([1, 2, 3, 4, 5] + [2] * 10)
+
+    class Event:
+        def __init__(self, **kwargs):
+            pass
+
+        def record(self):
+            log.append("event")
+
+        def elapsed_time(self, other):
+            assert log[-1] == "sync"
+            return next(durations)
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(Event=Event, synchronize=lambda: log.append("sync"))
+    )
+    result = runner.measure_quick(
+        lambda: log.append("call"),
+        (),
+        {},
+        SimpleNamespace(zero_=lambda: log.append("flush")),
+        torch,
+    )
+    assert result["runtime_us"] == 2000
+    assert result["refinement_iterations"] == 10
+    assert result["pilot_trial_us"] == [1000, 2000, 3000, 4000, 5000]
+    assert result["trial_us"] == [2000] * 10
+    assert log.count("flush") == 100 + 5 + 100 + 10
+    assert log.count("sync") == 4

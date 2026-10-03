@@ -137,21 +137,39 @@ def l2_flush_buffer(torch: Any) -> Any:
 
 def measure_quick(
     func: Any, args: tuple[Any, ...], kwargs: dict[str, Any], flush: Any, torch: Any
-) -> list[float]:
+) -> dict[str, Any]:
     torch.cuda.synchronize()
     func(*args, **kwargs)
     torch.cuda.synchronize()
-    events = []
-    for _ in range(5):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
-        func(*args, **kwargs)
-        end.record()
-        flush.zero_()
-        events.append((start, end))
-    torch.cuda.synchronize()
-    return [start.elapsed_time(end) * 1000 for start, end in events]
+
+    def trials(count: int) -> list[float]:
+        for _ in range(100):
+            flush.zero_()
+        events = []
+        for _ in range(count):
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            func(*args, **kwargs)
+            end.record()
+            flush.zero_()
+            events.append((start, end))
+        torch.cuda.synchronize()
+        return [start.elapsed_time(end) * 1000 for start, end in events]
+
+    pilot = trials(5)
+    fastest = min(pilot)
+    if not math.isfinite(fastest) or fastest <= 0:
+        raise RuntimeError("Quick benchmark returned an invalid pilot runtime")
+    iterations = math.ceil(10_000 / fastest)
+    refined = iterations >= 10
+    final = trials(iterations) if refined else pilot
+    return {
+        "runtime_us": sum(final) / len(final) if refined else fastest,
+        "pilot_trial_us": pilot,
+        "trial_us": final,
+        "refinement_iterations": iterations if refined else 0,
+    }
 
 
 def quick_benchmark(
@@ -243,14 +261,13 @@ def quick_benchmark(
             candidate = bound_candidate(compiled, constants, variant["options"], signature, grid)
 
             try:
-                trials = measure_quick(candidate, benchmark_args, benchmark_kwargs, flush, torch)
-                runtime = min(trials)
+                timing = measure_quick(candidate, benchmark_args, benchmark_kwargs, flush, torch)
+                runtime = timing["runtime_us"]
                 if not math.isfinite(runtime) or runtime <= 0:
                     raise RuntimeError("Quick benchmark returned an invalid runtime")
                 row.update(
                     status="measured",
-                    runtime_us=runtime,
-                    trial_us=trials,
+                    **timing,
                     evaluation="not_needed" if evaluate else "skipped",
                 )
             except Exception as error:
@@ -279,7 +296,7 @@ def quick_benchmark(
         "quick_benchmark_delta": delta,
         "pruning_min_runtime_us": minimum_us,
         "evaluation_enabled": evaluate is not None,
-        "timing_method": "CUDA events: fastest of 5 single launches; L2 zeroing after each trial",
+        "timing_method": "CUDA events: 5-trial pilot, then 10 ms mean when at least 10 iterations; 100 preflushes per stage",
         "benchmark_input_loads": 1,
         "l2_flush_bytes": flush.numel() * flush.element_size(),
     }

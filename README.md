@@ -237,10 +237,14 @@ retains configurations within 10% of the final fastest accepted quick runtime.
 Set it to zero to disable that exemption. Invalid and failed kernels are excluded.
 
 Each kernel is synchronized, launched once and synchronized again to catch
-execution errors. Five trials then record CUDA start/end events around one
-launch, followed by zeroing a buffer twice the GPU's reported L2 cache size.
-One final synchronization completes the events; the fastest trial is the quick
-runtime. The cache clear is outside the timed interval.
+execution errors. Enqueue 100 L2 flushes without synchronization, then five
+single-launch CUDA event trials, each followed by an L2 flush. Synchronize once
+and take the fastest pilot trial. Compute `ceil(10_000 / pilot_us)` iterations
+to cover 10 ms of kernel time. If fewer than ten iterations are needed, return
+the pilot minimum. Otherwise enqueue another 100 flushes and repeat the event
+loop for that iteration count, returning its mean after one final synchronization.
+Flushes zero a buffer twice the reported L2 cache size, outside the timed interval.
+Reports retain both stages' timings and the refinement iteration count.
 
 Quick GPU jobs reuse one input set across their configurations. Warmup and
 repeated launches can mutate these inputs; evaluation uses fresh original inputs.
