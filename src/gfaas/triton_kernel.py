@@ -2,25 +2,27 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
+import io
 import json
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import replace
 from typing import Any
 
-from . import triton_compiler_runner
-from .app import App
-from .artifacts import ArtifactOutput
+from . import triton_compiler_runner, triton_quick_runner
+from .app import Function, active_function_scope
+from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
-from .image import Image
 from .triton_compat import (
     UnsupportedTritonKernelError,
     argument_type,
     source_bundle,
     validate_kernel,
 )
+from .triton_policy import TritonTuning, portable_callable
 
 
 class TritonCompilationError(GfaasError):
@@ -35,14 +37,23 @@ class TritonCompilationError(GfaasError):
 
 
 class TritonExecutionNotImplementedError(GfaasError):
-    """Compilation completed successfully; this API deliberately never launches."""
+    """Current phases completed; the remaining benchmark/execution phases are deferred."""
 
     def __init__(self, report: dict[str, Any], call_id: str | None) -> None:
         self.report, self.call_id = report, call_id
         self.call_ids = report.get("call_ids", [call_id] if call_id else [])
         super().__init__(
             f"Compiled {len(report['results'])} variants across {len(self.call_ids)} compiler Calls; "
-            "execution is not implemented"
+            "the remaining benchmark/execution pipeline is not implemented"
+        )
+
+
+class TritonQuickBenchmarkError(GfaasError):
+    def __init__(self, report: dict[str, Any], call_id: str) -> None:
+        self.report, self.call_id = report, call_id
+        self.call_ids = report["call_ids"]
+        super().__init__(
+            f"Triton quick benchmark could not find a valid best configuration; Call {call_id}"
         )
 
 
@@ -53,73 +64,39 @@ class _IncompleteCompilerReportError(GfaasError):
 
 
 class TritonKernel:
-    """Wrap plain jit or vanilla autotune(jit), compile on call, and never execute.
+    """Compile native configurations and optionally quick-benchmark in the active context.
 
-    Each call blocks until all configurations have finished compilation. Errors
-    expose ``report``, ``call_id``, and ``call_ids``; each Call publishes a named
-    ``compiled-triton`` Artifact. Neither the grid callable nor tensor contents
-    are evaluated or uploaded. Runtime scalar and pointer alignment specialization
-    are deliberately conservative in this first implementation.
+    Calls capture ``with app.function(...)`` settings. Normal execution and full
+    benchmarking are deferred; their boundary raises an error exposing reports
+    and all Call IDs. Compile-only calls never evaluate the grid or send tensor
+    contents. Quick benchmarking sends input snapshots and evaluates its grid
+    and optional correctness callback on the remote GPU.
     """
+
+    compiler: Function
+    gpu_function: Function
+    grid: Any
 
     def __init__(
         self,
         kernel: Any,
         *,
-        app: App,
-        target_arch: int,
-        image: Image | None = None,
-        gpu_type: str = "gb300",
-        cpu_millicores: int = 16000,
-        memory_bytes: int = 4 * 1024**3,
-        timeout: int = 300,
-        capacity_wait: int | None = None,
-        ephemeral_storage_bytes: int | None = None,
-        shared_memory_bytes: int | None = None,
-        max_log_bytes: int | None = None,
-        max_output_bytes: int | None = None,
-        env: dict[str, str] | None = None,
+        tuning: TritonTuning | None = None,
         variants_per_job: int | None = None,
         max_concurrent_jobs: int = 8,
         cache_compression_level: int = 1,
     ) -> None:
         validate_kernel(kernel)
-        if not 1000 <= cpu_millicores <= 32000 or not 70 <= target_arch <= 999:
-            raise ValueError("Invalid compilation CPU resources or CUDA target architecture")
-        if memory_bytes < 1024**3 or not 1 <= timeout <= 86400:
-            raise ValueError("Invalid compiler memory or execution timeout")
-        if not 0 <= cache_compression_level <= 9:
-            raise ValueError("Invalid cache compression level")
         if variants_per_job is not None and variants_per_job < 1:
             raise ValueError("Invalid variants per compiler job")
         if not 1 <= max_concurrent_jobs <= 32:
             raise ValueError("Invalid concurrent compiler jobs")
-        self.kernel, self.app, self.target_arch = kernel, app, target_arch
+        if not 0 <= cache_compression_level <= 9:
+            raise ValueError("Invalid cache compression level")
+        self.kernel, self.tuning = kernel, tuning
         self.variants_per_job = variants_per_job
         self.max_concurrent_jobs = max_concurrent_jobs
         self.cache_compression_level = cache_compression_level
-        # Use the same environment resolution and submission path as ordinary
-        # @app.function jobs. The App owns its client and authentication settings.
-        self.compiler = app.function(
-            image=image,
-            gpu_count=0,
-            gpu_type=gpu_type,
-            cpu_millicores=cpu_millicores,
-            memory_bytes=memory_bytes,
-            timeout=timeout,
-            capacity_wait=capacity_wait,
-            ephemeral_storage_bytes=ephemeral_storage_bytes,
-            shared_memory_bytes=shared_memory_bytes,
-            max_log_bytes=max_log_bytes,
-            max_output_bytes=max_output_bytes,
-            env=env,
-            outputs=(
-                ArtifactOutput.directory(
-                    "compiled-triton", "compiled-triton", publish_on_failure=True
-                ),
-            ),
-        )(triton_compiler_runner.compile_batch)
-        self.compiler._resolve_image()
 
     def _job_count(self, variant_count: int) -> int:
         if self.variants_per_job is not None:
@@ -136,9 +113,51 @@ class TritonKernel:
         return max(1, min(32, (self.compiler.cpu_millicores or 1000) // 1000))
 
     def __getitem__(self, grid: Any) -> Any:
-        # Accept normal launch syntax, but do not call a potentially effectful grid.
         def launch(*args: Any, **kwargs: Any) -> None:
-            self._compile(args, kwargs)
+            scope = active_function_scope()
+            invocation = copy.copy(self)
+            invocation.compiler = scope.bind(triton_compiler_runner.compile_batch)
+            invocation.gpu_function = scope.bind(triton_quick_runner.probe_target)
+            image = invocation.compiler._resolve_image()
+            invocation.compiler = replace(invocation.compiler, image=image)
+            invocation.gpu_function = replace(invocation.gpu_function, image=image)
+            gpu = invocation.gpu_function.gpu
+            count = invocation.gpu_function.gpu_count
+            if count is None and gpu is None or count is not None and count != 1:
+                raise ValueError("Select exactly one GPU target in app.function for TritonKernel")
+            if gpu and "," in gpu:
+                raise ValueError("TritonKernel currently supports a single GPU target")
+            pool = invocation.gpu_function.gpu_type
+            if pool == "any" and gpu and not gpu.isdigit() and gpu != "any":
+                pool = gpu
+            invocation.gpu_function = replace(
+                invocation.gpu_function, gpu=None, gpu_count=1, gpu_type=pool, outputs=()
+            )
+            invocation.compiler = replace(
+                invocation.compiler,
+                gpu=None,
+                gpu_count=0,
+                gpu_type=pool,
+                cpu_millicores=(
+                    16000
+                    if invocation.compiler.cpu_millicores is None
+                    else invocation.compiler.cpu_millicores
+                ),
+                memory_bytes=(
+                    4 * 1024**3
+                    if invocation.compiler.memory_bytes is None
+                    else invocation.compiler.memory_bytes
+                ),
+                outputs=(
+                    ArtifactOutput.directory(
+                        "compiled-triton", "compiled-triton", publish_on_failure=True
+                    ),
+                ),
+            )
+            if not 1000 <= (invocation.compiler.cpu_millicores or 0) <= 32000:
+                raise ValueError("Compiler CPU budget must be between 1000 and 32000 millicores")
+            invocation.grid = grid
+            invocation._compile(args, kwargs)
 
         return launch
 
@@ -212,9 +231,64 @@ class TritonKernel:
                 variants.append(variant)
                 variant_ids.add(variant["id"])
         source = source_bundle(jit)
-        # Resolve once before fan-out; concurrent jobs share the App's client.
-        _ = self.app.client
-        self._dispatch(source, jit.fn.__name__, triton.__version__, variants)
+        import cloudpickle
+
+        payload = None
+        callbacks = None
+        if self.tuning is not None and self.tuning.quick_benchmark_delta is not None:
+            import torch  # type: ignore[import-not-found]
+
+            buffer = io.BytesIO()
+            torch.save((args, argument_kwargs), buffer)
+            payload = buffer.getvalue()
+            callbacks = cloudpickle.dumps(
+                (portable_callable(self.grid), portable_callable(self.tuning.evaluate))
+            )
+        probe = self.gpu_function.spawn()
+        target = probe.wait()
+        if not isinstance(target, dict) or target.get("backend") != "cuda":
+            raise GfaasError("GPU target discovery returned an invalid target")
+        self.target_arch = target["arch"]
+        try:
+            report, call_id = self._dispatch(source, jit.fn.__name__, triton.__version__, variants)
+        except TritonCompilationError as error:
+            error.report["target_probe_call_id"] = probe.call_id
+            error.report["call_ids"] = [probe.call_id, *error.call_ids]
+            error.call_ids = error.report["call_ids"]
+            raise
+        compile_ids = report.get("call_ids", [call_id])
+        report["call_ids"] = [probe.call_id, *compile_ids]
+        report["target_probe_call_id"] = probe.call_id
+        report["next_phase"] = "full_benchmark" if self.tuning is not None else "execution"
+        if payload is not None:
+            artifacts = []
+            for identity in compile_ids:
+                result = self.compiler.app.client.get_call_result(identity)
+                output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
+                artifacts.append(ArtifactRef(output["artifact_id"]))
+            benchmark = replace(self.gpu_function, handler=triton_quick_runner.quick_benchmark)
+            assert self.tuning is not None and self.tuning.quick_benchmark_delta is not None
+            quick = benchmark.spawn(
+                source=source,
+                kernel_name=jit.fn.__name__,
+                variants=json.dumps(variants),
+                artifacts=artifacts,
+                inputs=payload,
+                callbacks=callbacks,
+                target=target,
+                triton_version=triton.__version__,
+                delta=self.tuning.quick_benchmark_delta,
+                minimum_us=self.tuning.pruning_min_runtime_us,
+            )
+            report["call_ids"].append(quick.call_id)
+            try:
+                report["quick_benchmark"] = quick.wait()
+            except Exception as error:
+                report["quick_benchmark"] = {"status": "failed", "diagnostics": str(error)}
+                raise TritonQuickBenchmarkError(report, quick.call_id) from error
+            if report["quick_benchmark"]["status"] != "passed":
+                raise TritonQuickBenchmarkError(report, quick.call_id)
+        raise TritonExecutionNotImplementedError(report, call_id)
 
     def _dispatch(
         self,
@@ -222,7 +296,7 @@ class TritonKernel:
         kernel_name: str,
         triton_version: str,
         variants: list[dict[str, Any]],
-    ) -> None:
+    ) -> tuple[dict[str, Any], str | None]:
         started = time.perf_counter()
         call_id: str | None
         job_count = self._job_count(len(variants))
@@ -311,9 +385,18 @@ class TritonKernel:
                 "max_concurrent_jobs": self.max_concurrent_jobs,
                 "workers_per_job": self._workers,
             }
-        if any(row["status"] != "compiled" for row in report["results"]):
+        failed = any(row["status"] != "compiled" for row in report["results"])
+        quick_enabled = self.tuning is not None and self.tuning.quick_benchmark_delta is not None
+        structural = report.get("job_failed") or any(
+            s["report"].get("job_failed") for s in report.get("shards", [])
+        )
+        if failed and (
+            not quick_enabled
+            or structural
+            or not any(r["status"] == "compiled" for r in report["results"])
+        ):
             raise TritonCompilationError(report, call_id)
-        raise TritonExecutionNotImplementedError(report, call_id)
+        return report, call_id
 
     def _submit_shard(
         self,

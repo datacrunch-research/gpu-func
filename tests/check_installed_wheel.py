@@ -72,6 +72,8 @@ class InstalledWheelTests(unittest.TestCase):
             "ArtifactOutput",
             "ArtifactCheckpoint",
             "TritonKernel",
+            "TritonTuning",
+            "TritonQuickBenchmarkError",
             "TritonCompilationError",
             "TritonExecutionNotImplementedError",
         ):

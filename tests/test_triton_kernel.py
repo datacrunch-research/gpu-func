@@ -59,6 +59,10 @@ class Client:
         self.fail = fail
 
     def submit(self, **kwargs):
+        if kwargs["function"].__name__ == "probe_target":
+            return SimpleNamespace(
+                call_id="call_probe", wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32}
+            )
         from gfaas.artifacts import collect_artifact_ids
 
         assert collect_artifact_ids((), kwargs["kwargs"]) == []
@@ -93,15 +97,37 @@ def triton(monkeypatch):
 
 
 def configuration(client=None, **options):
-    return dict(
-        app=App("kernels", image=Image("compiler-image"), client=client), target_arch=103, **options
-    )
+    return dict(app=App("kernels", image=Image("compiler-image"), client=client), **options)
+
+
+def configured_kernel(native, *, app, **options):
+    policy = {
+        k: options.pop(k)
+        for k in list(options)
+        if k in {"variants_per_job", "max_concurrent_jobs", "cache_compression_level", "tuning"}
+    }
+    options.pop("target_arch", None)
+    kernel = TritonKernel(native, **policy)
+    scope = app.function(gpu_count=1, gpu_type="gb300", **options)
+
+    class ScopedKernel:
+        def __getitem__(self, grid):
+            def launch(*args, **kwargs):
+                with scope:
+                    return kernel[grid](*args, **kwargs)
+
+            return launch
+
+        def __getattr__(self, name):
+            return getattr(kernel, name)
+
+    return ScopedKernel()
 
 
 def test_single_compile_never_evaluates_grid_or_transports_tensor():
     client = Client()
     tensor = SimpleNamespace(dtype="torch.float32", data_ptr=lambda: pytest.fail("pointer read"))
-    kernel = TritonKernel(JIT(add), **configuration(client))
+    kernel = configured_kernel(JIT(add), **configuration(client))
     with pytest.raises(TritonExecutionNotImplementedError) as error:
         kernel[lambda meta: pytest.fail("grid executed")](tensor, 256, 64)
     request = client.submission
@@ -125,7 +151,7 @@ def test_autotune_compiles_every_config_and_partial_failures_have_report():
         None,
         None,
     )
-    kernel = TritonKernel(native, **configuration(client))
+    kernel = configured_kernel(native, **configuration(client))
     tensor = SimpleNamespace(dtype="torch.float32", data_ptr=lambda: 0)
     with pytest.raises(TritonCompilationError) as error:
         kernel[(1,)](tensor, N=256)
@@ -139,18 +165,18 @@ def test_modifiers_rejected_before_submission(modifier):
     native = Autotuner(JIT(add), ["X", "N", "BLOCK"], [Config({"BLOCK": 64})], ["N"], None, None)
     setattr(native, modifier, 2 if modifier == "configs_top_k" else lambda *a: None)
     with pytest.raises(UnsupportedTritonKernelError):
-        TritonKernel(native, **configuration(client))
+        configured_kernel(native, **configuration(client))
     assert client.submission is None
 
 
 def test_config_hooks_nested_wrappers_and_mutation_rejected():
     native = Autotuner(JIT(add), [], [Config({}, pre_hook=lambda: None)], [], None, None)
     with pytest.raises(UnsupportedTritonKernelError, match="pre_hook"):
-        TritonKernel(native, **configuration())
+        configured_kernel(native, **configuration())
     with pytest.raises(UnsupportedTritonKernelError):
-        TritonKernel(SimpleNamespace(fn=JIT(add)), **configuration())
+        configured_kernel(SimpleNamespace(fn=JIT(add)), **configuration())
     jit = JIT(add)
-    kernel = TritonKernel(jit, **configuration())
+    kernel = configured_kernel(jit, **configuration())
     jit.pre_run_hooks.append(lambda: None)
     with pytest.raises(UnsupportedTritonKernelError):
         kernel[(1,)](None, 1, 64)
@@ -159,7 +185,7 @@ def test_config_hooks_nested_wrappers_and_mutation_rejected():
 def test_positional_configuration_conflict_rejected_without_network():
     client = Client()
     native = Autotuner(JIT(add), [], [Config({"BLOCK": 64})], [], None, None)
-    kernel = TritonKernel(native, **configuration(client))
+    kernel = configured_kernel(native, **configuration(client))
     with pytest.raises(ValueError, match="conflicts"):
         kernel[(1,)](None, 1, 128)
     assert client.submission is None
@@ -169,7 +195,7 @@ def test_new_autotune_modifier_is_rejected_even_without_named_check():
     native = Autotuner(JIT(add), [], [Config({"BLOCK": 64})], [], None, None)
     native.future_callback = lambda: None
     with pytest.raises(UnsupportedTritonKernelError, match="Unrecognized"):
-        TritonKernel(native, **configuration())
+        configured_kernel(native, **configuration())
 
 
 def test_legacy_default_repr_closure_is_accepted_and_custom_one_rejected():
@@ -180,15 +206,15 @@ def test_legacy_default_repr_closure_is_accepted_and_custom_one_rejected():
         return lambda _: add.__name__ if repr is None else repr(_)
 
     jit.repr = attach(None)
-    TritonKernel(jit, **configuration())
+    configured_kernel(jit, **configuration())
     jit.repr = attach(lambda _: "custom")
     with pytest.raises(UnsupportedTritonKernelError, match="repr"):
-        TritonKernel(jit, **configuration())
+        configured_kernel(jit, **configuration())
 
 
 def test_ir_override_launch_rejected_before_remote_work():
     client = Client()
-    kernel = TritonKernel(JIT(add), **configuration(client))
+    kernel = configured_kernel(JIT(add), **configuration(client))
     with pytest.raises(UnsupportedTritonKernelError, match="ir_override"):
         kernel[(1,)](None, 1, 64, ir_override="custom.ptx")
     assert client.submission is None
@@ -197,12 +223,17 @@ def test_ir_override_launch_rejected_before_remote_work():
 def test_wrong_variant_identity_cannot_report_success():
     class WrongReportClient(Client):
         def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "probe_target":
+                return SimpleNamespace(
+                    call_id="call_probe",
+                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                )
             return SimpleNamespace(
                 call_id="call_test",
                 wait=lambda: {"results": [{"id": "different-variant", "status": "compiled"}]},
             )
 
-    kernel = TritonKernel(JIT(add), **configuration(WrongReportClient()))
+    kernel = configured_kernel(JIT(add), **configuration(WrongReportClient()))
     with pytest.raises(GfaasError, match="incomplete variant report"):
         kernel[(1,)](None, 1, 64)
 
@@ -212,7 +243,7 @@ def test_large_configuration_set_fits_bounded_artifact_scanner():
     native = Autotuner(
         JIT(add), [], [Config({"BLOCK": block}) for block in range(1536)], [], None, None
     )
-    wrapped = TritonKernel(native, **configuration(client))
+    wrapped = configured_kernel(native, **configuration(client))
     with pytest.raises(TritonExecutionNotImplementedError) as outcome:
         wrapped[(1,)](None, N=256)
     assert len(outcome.value.report["results"]) == 1536
@@ -227,6 +258,11 @@ def test_sharding_bounds_inflight_jobs_preserves_order_and_call_identities():
             self.active = self.peak = 0
 
         def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "probe_target":
+                return SimpleNamespace(
+                    call_id="call_probe",
+                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                )
             with lock:
                 index = len(self.requests)
                 self.requests.append(kwargs)
@@ -251,11 +287,11 @@ def test_sharding_bounds_inflight_jobs_preserves_order_and_call_identities():
     options = configuration(client, variants_per_job=2, max_concurrent_jobs=3)
     native = Autotuner(JIT(add), [], [Config({"BLOCK": i}) for i in range(13)], [], None, None)
     with pytest.raises(TritonExecutionNotImplementedError) as outcome:
-        TritonKernel(native, **options)[(1,)](None, N=256)
+        configured_kernel(native, **options)[(1,)](None, N=256)
     report = outcome.value.report
     assert client.peak == 3
     assert len(client.requests) == 7
-    assert len(set(outcome.value.call_ids)) == 7
+    assert len(set(outcome.value.call_ids)) == 8
     assert [v["constants"]["BLOCK"] for v in report["variants"]] == list(range(13))
     assert [r["id"] for r in report["results"]] == [v["id"] for v in report["variants"]]
     assert sum(len(json.loads(r["kwargs"]["variants"])) for r in client.requests) == 13
@@ -269,6 +305,11 @@ def test_failed_shard_keeps_successful_results_and_failed_call_identity():
             self.lock = Lock()
 
         def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "probe_target":
+                return SimpleNamespace(
+                    call_id="call_probe",
+                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                )
             with self.lock:
                 index = self.index
                 self.index += 1
@@ -288,7 +329,7 @@ def test_failed_shard_keeps_successful_results_and_failed_call_identity():
     options = configuration(FailedShardClient(), variants_per_job=2)
     native = Autotuner(JIT(add), [], [Config({"BLOCK": i}) for i in range(6)], [], None, None)
     with pytest.raises(TritonCompilationError) as outcome:
-        TritonKernel(native, **options)[(1,)](None, N=256)
+        configured_kernel(native, **options)[(1,)](None, N=256)
     rows = outcome.value.report["results"]
     assert sum(r["status"] == "compiled" for r in rows) == 4
     assert sum(r["status"] == "failed" for r in rows) == 2
@@ -302,6 +343,11 @@ def test_structural_failure_stops_queued_shards_without_losing_variants():
             self.submissions = 0
 
         def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "probe_target":
+                return SimpleNamespace(
+                    call_id="call_probe",
+                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                )
             self.submissions += 1
             raise GfaasError("service rejected submission")
 
@@ -309,9 +355,9 @@ def test_structural_failure_stops_queued_shards_without_losing_variants():
     options = configuration(client, variants_per_job=2, max_concurrent_jobs=1)
     native = Autotuner(JIT(add), [], [Config({"BLOCK": i}) for i in range(12)], [], None, None)
     with pytest.raises(TritonCompilationError) as outcome:
-        TritonKernel(native, **options)[(1,)](None, N=256)
+        configured_kernel(native, **options)[(1,)](None, N=256)
     assert client.submissions == 1
-    assert outcome.value.call_ids == []
+    assert outcome.value.call_ids == ["call_probe"]
     assert len(outcome.value.report["results"]) == 12
     assert sum(s["report"].get("not_submitted", False) for s in outcome.value.report["shards"]) == 5
 
@@ -320,56 +366,117 @@ def test_structural_failure_stops_queued_shards_without_losing_variants():
     ("count", "jobs"), [(1, 1), (128, 1), (129, 2), (1024, 8), (1536, 8), (2048, 8), (2049, 9)]
 )
 def test_automatic_sharding_balances_chunks_and_dispatch_window(count, jobs):
-    kernel = TritonKernel(JIT(add), **configuration())
+    kernel = configured_kernel(JIT(add), **configuration())
     assert kernel._job_count(count) == jobs
-    assert kernel._workers == 16
     assert kernel.max_concurrent_jobs == 8
     assert kernel.cache_compression_level == 1
 
 
 def test_explicit_chunk_limit_overrides_automatic_policy():
-    assert TritonKernel(JIT(add), **configuration(variants_per_job=100))._job_count(1536) == 16
-    assert TritonKernel(JIT(add), **configuration(variants_per_job=2048))._job_count(1536) == 1
-    assert TritonKernel(JIT(add), **configuration(max_concurrent_jobs=4))._job_count(1024) == 4
+    assert configured_kernel(JIT(add), **configuration(variants_per_job=100))._job_count(1536) == 16
+    assert configured_kernel(JIT(add), **configuration(variants_per_job=2048))._job_count(1536) == 1
+    assert configured_kernel(JIT(add), **configuration(max_concurrent_jobs=4))._job_count(1024) == 4
 
 
 def test_existing_app_function_environment_and_resource_settings_are_forwarded():
     client = Client()
     inherited = Image.from_remote("compiler", {"image_digest": "sha256:" + "a" * 64})
     app = App("existing-app", image=inherited, client=client)
-    kernel = TritonKernel(
-        JIT(add),
-        app=app,
-        target_arch=103,
-        cpu_millicores=2500,
-        memory_bytes=2 * 1024**3,
-        timeout=91,
-        capacity_wait=17,
-        ephemeral_storage_bytes=3 * 1024**3,
-        shared_memory_bytes=128 * 1024**2,
-        max_output_bytes=64 * 1024**2,
-        max_log_bytes=1024,
-        env={"EXAMPLE": "value"},
-    )
-    with pytest.raises(TritonExecutionNotImplementedError):
+    kernel = TritonKernel(JIT(add))
+    with (
+        app.function(
+            gpu="gb300",
+            cpu_millicores=2500,
+            memory_bytes=2 * 1024**3,
+            timeout=91,
+            capacity_wait=17,
+            ephemeral_storage_bytes=3 * 1024**3,
+            shared_memory_bytes=128 * 1024**2,
+            max_output_bytes=64 * 1024**2,
+            max_log_bytes=1024,
+            env={"EXAMPLE": "value"},
+        ),
+        pytest.raises(TritonExecutionNotImplementedError),
+    ):
         kernel[(1,)](None, 1, 64)
     request = client.submission
-    assert request["image"] is inherited
-    assert request["app_name"] == "existing-app"
+    assert request["image"] is inherited and request["app_name"] == "existing-app"
     assert request["timeout_s"] == 91 and request["capacity_wait_s"] == 17
-    assert request["cpu_millicores"] == 1000  # one variant, one core
+    assert request["cpu_millicores"] == 1000 and request["gpu_type"] == "gb300"
     assert request["memory_bytes"] == 2 * 1024**3
     assert request["ephemeral_storage_bytes"] == 3 * 1024**3
     assert request["shared_memory_bytes"] == 128 * 1024**2
     assert request["max_output_bytes"] == 64 * 1024**2 and request["max_log_bytes"] == 1024
-    assert request["env"] == {"EXAMPLE": "value"}
-    assert kernel.compiler.cpu_millicores == 2500  # shared settings unchanged
-    assert app.client is client
+    assert request["env"] == {"EXAMPLE": "value"} and app.client is client
+    assert not hasattr(kernel, "compiler")  # invocation settings do not leak onto shared kernel
 
 
-def test_existing_image_override_and_missing_image_validation():
-    app = App("existing", image=Image("default"))
-    kernel = TritonKernel(JIT(add), app=app, image=Image("override"), target_arch=103)
-    assert kernel.compiler._resolve_image().name == "override"
-    with pytest.raises(ValueError, match="no image"):
-        TritonKernel(JIT(add), app=App("missing"), target_arch=103)
+def test_context_required_and_image_override_is_resolved_at_invocation():
+    kernel = TritonKernel(JIT(add))
+    with pytest.raises(RuntimeError, match="inside with app.function"):
+        kernel[(1,)](None, 1, 64)
+    client = Client()
+    app = App("existing", image=Image("default"), client=client)
+    with (
+        app.function(gpu="gb300", image=Image("override")),
+        pytest.raises(TritonExecutionNotImplementedError),
+    ):
+        kernel[(1,)](None, 1, 64)
+    assert client.submission["image"].name == "override"
+    with App("missing").function(gpu="gb300"), pytest.raises(ValueError, match="no image"):
+        kernel[(1,)](None, 1, 64)
+
+
+def test_optional_delta_skips_quick_benchmark_and_evaluation():
+    import gfaas
+
+    client = Client()
+    kernel = TritonKernel(
+        JIT(add), tuning=gfaas.TritonTuning(evaluate=lambda *_: pytest.fail("eval ran"))
+    )
+    app = App("skip", image=Image("compiler"), client=client)
+    with app.function(gpu="gb300"), pytest.raises(TritonExecutionNotImplementedError) as outcome:
+        kernel[(1,)](None, 1, 64)
+    assert outcome.value.report["next_phase"] == "full_benchmark"
+    assert "quick_benchmark" not in outcome.value.report
+    assert client.submission["function"].__name__ == "compile_batch"
+
+
+def test_quick_gpu_phase_receives_context_input_snapshot_and_compiler_artifacts(monkeypatch):
+    import cloudpickle
+
+    import gfaas
+
+    fake_torch = ModuleType("torch")
+    fake_torch.save = lambda inputs, buffer: buffer.write(b"snapshot")
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+
+    class QuickClient(Client):
+        def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "quick_benchmark":
+                self.quick_request = kwargs
+                return SimpleNamespace(call_id="call_quick", wait=lambda: {"status": "passed"})
+            return super().submit(**kwargs)
+
+        def get_call_result(self, identity):
+            assert identity == "call_test"
+            return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_compiled"}]}
+
+    client = QuickClient()
+    kernel = TritonKernel(
+        JIT(add), tuning=gfaas.TritonTuning(quick_benchmark_delta=0.15, pruning_min_runtime_us=50)
+    )
+    app = App("quick", image=Image("compiler"), client=client)
+    with (
+        app.function(gpu="gb300", timeout=44, env={"A": "B"}),
+        pytest.raises(TritonExecutionNotImplementedError) as outcome,
+    ):
+        kernel[(1,)](None, 1, 64)
+    request = client.quick_request
+    assert request["gpu_count"] == 1 and request["gpu_type"] == "gb300"
+    assert request["timeout_s"] == 44 and request["env"] == {"A": "B"}
+    data = request["kwargs"]
+    assert data["inputs"] == b"snapshot" and data["artifacts"][0].artifact_id == "art_compiled"
+    assert data["delta"] == 0.15 and data["minimum_us"] == 50
+    assert cloudpickle.loads(data["callbacks"]) == ((1,), None)
+    assert outcome.value.call_ids == ["call_probe", "call_test", "call_quick"]

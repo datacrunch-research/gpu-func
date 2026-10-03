@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +29,56 @@ from .image import Image
 
 if TYPE_CHECKING:
     from .client import Client, RemoteResult
+
+
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
+_ACTIVE_FUNCTION: ContextVar[FunctionScope | None] = ContextVar("vfunc_function", default=None)
+
+
+def active_function_scope() -> FunctionScope:
+    scope = _ACTIVE_FUNCTION.get()
+    if scope is None:
+        raise RuntimeError("TritonKernel must be called inside with app.function(...)")
+    return scope
+
+
+class FunctionScope:
+    """Existing function configuration, usable as a decorator or scoped context."""
+
+    def __init__(self, app: App, options: dict[str, Any]) -> None:
+        self.app = app
+        self.options = dict(options)
+        self.options["env"] = dict(options.get("env") or {})
+        self.options["outputs"] = tuple(options.get("outputs") or ())
+        self._tokens: ContextVar[tuple[Token[FunctionScope | None], ...]] = ContextVar(
+            "vfunc_scope_tokens", default=()
+        )
+
+    def bind(self, handler: Callable[..., Any]) -> Function:
+        options = dict(self.options)
+        options["timeout_s"] = options.pop("timeout")
+        options["capacity_wait_s"] = options.pop("capacity_wait")
+        options["env"] = dict(options["env"])
+        return Function(app=self.app, handler=handler, **options)
+
+    def __call__(self, handler: Callable[..., Any]) -> Function:
+        fn = self.bind(handler)
+        self.app._functions[fn.name] = fn
+        return fn
+
+    def __enter__(self) -> FunctionScope:
+        token = _ACTIVE_FUNCTION.set(self)
+        self._tokens.set((*self._tokens.get(), token))
+        return self
+
+    def __exit__(self, *exception: Any) -> None:
+        tokens = self._tokens.get()
+        _ACTIVE_FUNCTION.reset(tokens[-1])
+        self._tokens.set(tokens[:-1])
 
 
 @dataclass
@@ -132,41 +183,44 @@ class App:
     def function(
         self,
         *,
-        image: Image | None = None,
-        gpu: str | None = None,
-        gpu_count: int | None = None,
-        gpu_type: str = "any",
-        timeout: int = 300,
-        capacity_wait: int | None = None,
-        cpu_millicores: int | None = None,
-        memory_bytes: int | None = None,
-        ephemeral_storage_bytes: int | None = None,
-        shared_memory_bytes: int | None = None,
-        max_log_bytes: int | None = None,
-        max_output_bytes: int | None = None,
-        env: dict[str, str] | None = None,
-        outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = (),
-    ) -> Callable[[Callable[..., Any]], Function]:
-        def decorator(handler: Callable[..., Any]) -> Function:
-            fn = Function(
-                app=self,
-                handler=handler,
-                image=image,
-                gpu=gpu,
-                gpu_count=gpu_count,
-                gpu_type=gpu_type,
-                timeout_s=timeout,
-                capacity_wait_s=capacity_wait,
-                cpu_millicores=cpu_millicores,
-                memory_bytes=memory_bytes,
-                ephemeral_storage_bytes=ephemeral_storage_bytes,
-                shared_memory_bytes=shared_memory_bytes,
-                max_log_bytes=max_log_bytes,
-                max_output_bytes=max_output_bytes,
-                env=dict(env or {}),
-                outputs=tuple(outputs),
-            )
-            self._functions[fn.name] = fn
-            return fn
-
-        return decorator
+        image: Image | None | _Unset = _UNSET,
+        gpu: str | None | _Unset = _UNSET,
+        gpu_count: int | None | _Unset = _UNSET,
+        gpu_type: str | _Unset = _UNSET,
+        timeout: int | _Unset = _UNSET,
+        capacity_wait: int | None | _Unset = _UNSET,
+        cpu_millicores: int | None | _Unset = _UNSET,
+        memory_bytes: int | None | _Unset = _UNSET,
+        ephemeral_storage_bytes: int | None | _Unset = _UNSET,
+        shared_memory_bytes: int | None | _Unset = _UNSET,
+        max_log_bytes: int | None | _Unset = _UNSET,
+        max_output_bytes: int | None | _Unset = _UNSET,
+        env: dict[str, str] | None | _Unset = _UNSET,
+        outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] | _Unset = _UNSET,
+    ) -> FunctionScope:
+        supplied = {k: v for k, v in locals().items() if k != "self" and v is not _UNSET}
+        options: dict[str, Any] = {
+            "image": None,
+            "gpu": None,
+            "gpu_count": None,
+            "gpu_type": "any",
+            "timeout": 300,
+            "capacity_wait": None,
+            "cpu_millicores": None,
+            "memory_bytes": None,
+            "ephemeral_storage_bytes": None,
+            "shared_memory_bytes": None,
+            "max_log_bytes": None,
+            "max_output_bytes": None,
+            "env": {},
+            "outputs": (),
+        }
+        parent = _ACTIVE_FUNCTION.get()
+        if parent is not None and parent.app is self:
+            options.update(parent.options)
+        if "gpu" in supplied and "gpu_count" not in supplied:
+            options["gpu_count"] = None
+        if ("gpu_count" in supplied or "gpu_type" in supplied) and "gpu" not in supplied:
+            options["gpu"] = None
+        options.update(supplied)
+        return FunctionScope(self, options)

@@ -22,14 +22,15 @@ def add(X, Y, N: tl.constexpr, BLOCK: tl.constexpr):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="registered image matching local Triton")
-    parser.add_argument("--target-arch", type=int, required=True)
+    parser.add_argument("--gpu", default="gb300")
     args = parser.parse_args()
     app = vfunc.App("triton-compile", image=vfunc.Image(args.image))
-    kernel = vfunc.TritonKernel(add, app=app, target_arch=args.target_arch)
+    kernel = vfunc.TritonKernel(add)
     x = torch.empty(1024)  # CPU tensors suffice: only argument metadata is sent.
     out = torch.empty_like(x)
     try:
-        kernel[lambda meta: (triton.cdiv(1024, meta["BLOCK"]),)](x, out, N=1024)
+        with app.function(gpu=args.gpu):
+            kernel[lambda meta: (triton.cdiv(1024, meta["BLOCK"]),)](x, out, N=1024)
     except vfunc.TritonExecutionNotImplementedError as error:
         print(f"Calls: {error.call_ids}")
         for variant in error.report["results"]:
