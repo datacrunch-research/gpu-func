@@ -64,7 +64,6 @@ class TritonBenchmark:
 
 @dataclass(frozen=True)
 class TritonTuning:
-    benchmark: TritonBenchmark = TritonBenchmark()
     pilot_pruning: TritonPruning | None = TritonPruning(relative_delta=0.25, absolute_us=1.0)
     refined_pruning: TritonPruning | None = TritonPruning()
     evaluate: Callable[..., bool] | None = None
@@ -75,6 +74,7 @@ class TritonTuning:
     replication_max_attempts: int = 8
     max_input_sets: int = 65536
     max_ring_bytes: int = 8 * 1024**3
+    benchmark: TritonBenchmark = TritonBenchmark()
 
     def __post_init__(self) -> None:
         if not isinstance(self.benchmark, TritonBenchmark):
