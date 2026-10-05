@@ -42,7 +42,6 @@ def test_preparation_captures_multiple_launches_without_executing_device_code(mo
             return run
 
     helion = ModuleType("helion")
-    helion.__version__ = "1.4.0"
     helion.Settings = lambda **kw: kw
     helion.Config = lambda **kw: kw
     helion.kernel = lambda *a, **kw: SimpleNamespace(bind=lambda args: Bound())
