@@ -137,7 +137,10 @@ def test_loaded_signature_restores_function_order_after_sorted_json(tmp_path, mo
 def test_generated_integer_tensor_arguments_use_triton_compiler_types(monkeypatch, dtype, kind):
     from gfaas.triton_compat import argument_type
 
+    triton = ModuleType("triton")
     language = ModuleType("triton.language")
+    triton.language = language
+    monkeypatch.setitem(sys.modules, "triton", triton)
     setattr(language, dtype, {"float32": "fp32"}.get(dtype, dtype))
     monkeypatch.setitem(sys.modules, "triton.language", language)
     tensor = SimpleNamespace(dtype="torch." + dtype, data_ptr=lambda: None)
