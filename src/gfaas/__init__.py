@@ -22,11 +22,15 @@ from .errors import (
     UnsupportedGpuPoolError,
 )
 from .image import Image
+from .kernel import Kernel, KernelBenchmark, benchmark
 from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
 
 __all__ = [
     "App",
+    "Kernel",
+    "KernelBenchmark",
+    "benchmark",
     "ArtifactRef",
     "scratch_path",
     "ArtifactOutput",

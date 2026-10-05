@@ -386,3 +386,58 @@ counts duplicate UUID placements as independent replicas.
 `quick_benchmark_variants_per_job` defaults to 256 and GPU concurrency to four;
 these are configurable batching limits. All phases reuse existing App/Image/
 Function settings and CPU-prepared artifacts; no service deployment is required.
+
+### Benchmark a selected kernel configuration
+
+`benchmark` accepts vFunc-managed launch handles (`Kernel`, currently
+`TritonKernel`). It autotunes an uncached specialization before measuring its
+selected configuration. A cached specialization reuses its compiler artifacts
+and configuration, then obtains fresh timings. Benchmarking leaves the caller's
+tensors unchanged and inherits the kernel's optional correctness evaluator and
+native reset/restore declarations.
+
+```python
+options = vfunc.KernelBenchmark(
+    estimate_trials=3,
+    final_duration_ms=25.0,
+    min_final_trials=25,
+    max_final_trials=1000,
+    graph_duration_ms=1.0,
+    min_calls_per_graph=10,
+    max_calls_per_graph=100,
+    l2_flush_iterations=100,
+    replication_factor=3,
+    replication_max_attempts=8,
+    max_concurrent_jobs=4,
+    max_input_sets=65536,
+    max_ring_bytes=8 * 1024**3,
+)
+with app.function(gpu="gb300"):
+    cold = vfunc.benchmark(kernel[grid], a, b, out, M=m, N=n, K=k, options=options)
+    warm = vfunc.benchmark(kernel[grid], a, b, out, M=m, N=n, K=k, options=options)
+print(warm["runtime_us"])           # Arithmetic mean of distinct GPU minima
+print(warm["replicas"])             # GPU UUIDs, timings, trials, evaluation, Call IDs
+print(warm["reused_specialization"]) # True: no repeat compilation or autotuning
+```
+
+Each new benchmark checks that the compiled kernel launches without error,
+optionally evaluates it on scratch inputs, and estimates duration with
+`estimate_trials` rotating-input event measurements. It uses the final autotuning
+phase: CUDA graphs for short kernels, direct events for longer kernels or when
+graph padding would exceed memory limits. Estimates size the graph and trial
+counts; the final duration is an estimated compute budget, rather than a wall-time
+deadline. `max_final_trials` counts graph replays or individual direct calls.
+Replication uses the same verified distinct-GPU scheme as autotuning, with no
+configuration pruning because only the selected variant is benchmarked. Initial
+measurement counts toward the replication factor; replica calls reuse that fresh
+duration estimate. There is currently one variant per job, so the concurrency
+limit only bounds replica dispatch and does not increase parallelism within a
+multi-GPU replica call.
+
+The returned report is immutable and includes `runtime_us`, `configuration`,
+`replicas`, `specialization`, `autotuned`, `reused_specialization`, raw shard
+reports and benchmarking Call IDs. Fresh benchmark results do not overwrite the
+original autotuning report in `kernel.tuning_results`.
+
+See [the complete matmul example](examples/triton_matmul_benchmark.py) for 1,024
+configuration combinations, all tuning/benchmark options, and both cache paths.

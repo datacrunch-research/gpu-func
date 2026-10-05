@@ -614,3 +614,85 @@ def test_launch_accepts_declarative_reset_but_rejects_custom_hooks():
     native.pre_hook = lambda *a: None
     with pytest.raises(UnsupportedTritonKernelError, match="callback"):
         NativeTritonKernel(native)
+
+
+@pytest.mark.parametrize("launch_first", [False, True])
+def test_launch_benchmark_autotunes_when_cold_reuses_winner_and_replicates(launch_first):
+    import gfaas
+
+    class BenchmarkClient(Client):
+        def __init__(self):
+            super().__init__()
+            self.phases = []
+            self.sequence = 0
+
+        def submit(self, **request):
+            name = request["function"].__name__
+            self.phases.append(name)
+            data = request["kwargs"]
+            if name == "execute_winner":
+                return SimpleNamespace(call_id="execute", wait=lambda: data["inputs"])
+            if name in ("benchmark_cycle", "benchmark_selected", "benchmark_replicas"):
+                self.sequence += 1
+                variants = json.loads(data["variants"])
+
+                def report(gpu, timing):
+                    return {
+                        "status": "passed",
+                        "gpu_uuid": gpu,
+                        "results": [
+                            {
+                                "id": variant["id"],
+                                "status": "measured",
+                                "runtime_us": timing,
+                                "refined_us": timing,
+                                "evaluation": "passed",
+                            }
+                            for variant in variants
+                        ],
+                    }
+
+                if name == "benchmark_cycle":
+                    result = report("gpu0", 10)
+                elif name == "benchmark_selected":
+                    result = report("gpu0", 12)
+                else:
+                    result = {"replica_reports": [report("gpu1", 14), report("gpu2", 13)]}
+                return SimpleNamespace(call_id=f"bench_{self.sequence}", wait=lambda: result)
+            return super().submit(**request)
+
+        def get_call_result(self, identity):
+            return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_compiled"}]}
+
+    client = BenchmarkClient()
+    kernel = NativeTritonKernel(JIT(add), tuning=gfaas.TritonTuning(replication_factor=1))
+    assert isinstance(kernel, gfaas.Kernel)
+    app = App("bench", image=Image("compiler"), client=client)
+    options = gfaas.KernelBenchmark(replication_factor=2)
+    with app.function(gpu="gb300"):
+        if launch_first:
+            kernel[(1,)](None, 1, 64)
+        first = gfaas.benchmark(kernel[(1,)], None, 1, 64, options=options)
+        second = gfaas.benchmark(kernel[(1,)], None, 1, 64, options=options)
+    assert first["autotuned"] is (not launch_first)
+    assert first["reused_specialization"] is launch_first
+    assert second["reused_specialization"] is True
+    assert client.phases.count("compile_batch") == 1
+    assert client.phases.count("benchmark_cycle") == 1
+    assert client.phases.count("execute_winner") == int(launch_first)
+    assert client.phases.count("benchmark_selected") == 2
+    assert client.phases.count("benchmark_replicas") == 2
+    assert first["runtime_us"] == 13
+    assert {r["gpu_uuid"] for r in first["replicas"]} == {"gpu0", "gpu1"}
+    assert first["configuration"] == second["configuration"]
+    assert next(iter(kernel.tuning_results.values()))["benchmark"]["best_runtime_us"] == 10
+    with pytest.raises(TypeError):
+        first["runtime_us"] = 1
+
+
+def test_launch_benchmark_options_type_check_happens_before_remote_work():
+    import gfaas
+
+    kernel = NativeTritonKernel(JIT(add))
+    with pytest.raises(TypeError, match="options"):
+        gfaas.benchmark(kernel[(1,)], None, 1, 64, options={})

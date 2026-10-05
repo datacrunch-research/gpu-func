@@ -17,6 +17,7 @@ from . import triton_compiler_runner, triton_quick_runner
 from .app import Function, active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
+from .kernel import Kernel, KernelBenchmark
 from .triton_compat import (
     UnsupportedTritonKernelError,
     argument_type,
@@ -75,7 +76,7 @@ def _freeze(value: Any) -> Any:
     return value
 
 
-class TritonKernel:
+class TritonKernel(Kernel):
     """Compile, tune, and execute using supplied tensors; cache results by specialization.
 
     Launches return None and copy remote tensor writes into the original tensors.
@@ -137,58 +138,65 @@ class TritonKernel:
     def _workers(self) -> int:
         return max(1, min(32, (self.compiler.cpu_millicores or 1000) // 1000))
 
-    def __getitem__(self, grid: Any) -> Any:
-        def launch(*args: Any, **kwargs: Any) -> Any:
-            scope = active_function_scope()
-            invocation = copy.copy(self)
-            invocation.compiler = scope.bind(triton_compiler_runner.compile_batch)
-            invocation.gpu_function = scope.bind(triton_quick_runner.probe_target)
-            image = invocation.compiler._resolve_image()
-            invocation.compiler = replace(invocation.compiler, image=image)
-            invocation.gpu_function = replace(invocation.gpu_function, image=image)
-            gpu = invocation.gpu_function.gpu
-            count = invocation.gpu_function.gpu_count
-            if count is None and gpu is None or count is not None and count != 1:
-                raise ValueError("Select exactly one GPU target in app.function for TritonKernel")
-            if gpu and "," in gpu:
-                raise ValueError("TritonKernel currently supports a single GPU target")
-            pool = invocation.gpu_function.gpu_type
-            if pool == "any" and gpu and not gpu.isdigit() and gpu != "any":
-                pool = gpu
-            invocation.gpu_function = replace(
-                invocation.gpu_function, gpu=None, gpu_count=1, gpu_type=pool, outputs=()
-            )
-            invocation.compiler = replace(
-                invocation.compiler,
-                gpu=None,
-                gpu_count=0,
-                gpu_type=pool,
-                cpu_millicores=(
-                    16000
-                    if invocation.compiler.cpu_millicores is None
-                    else invocation.compiler.cpu_millicores
+    def _invoke(
+        self,
+        grid: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+        options: KernelBenchmark | None,
+    ) -> Any:
+        scope = active_function_scope()
+        invocation = copy.copy(self)
+        invocation.compiler = scope.bind(triton_compiler_runner.compile_batch)
+        invocation.gpu_function = scope.bind(triton_quick_runner.probe_target)
+        image = invocation.compiler._resolve_image()
+        invocation.compiler = replace(invocation.compiler, image=image)
+        invocation.gpu_function = replace(invocation.gpu_function, image=image)
+        gpu = invocation.gpu_function.gpu
+        count = invocation.gpu_function.gpu_count
+        if count is None and gpu is None or count is not None and count != 1:
+            raise ValueError("Select exactly one GPU target in app.function for TritonKernel")
+        if gpu and "," in gpu:
+            raise ValueError("TritonKernel currently supports a single GPU target")
+        pool = invocation.gpu_function.gpu_type
+        if pool == "any" and gpu and not gpu.isdigit() and gpu != "any":
+            pool = gpu
+        invocation.gpu_function = replace(
+            invocation.gpu_function, gpu=None, gpu_count=1, gpu_type=pool, outputs=()
+        )
+        invocation.compiler = replace(
+            invocation.compiler,
+            gpu=None,
+            gpu_count=0,
+            gpu_type=pool,
+            cpu_millicores=(
+                16000
+                if invocation.compiler.cpu_millicores is None
+                else invocation.compiler.cpu_millicores
+            ),
+            memory_bytes=(
+                4 * 1024**3
+                if invocation.compiler.memory_bytes is None
+                else invocation.compiler.memory_bytes
+            ),
+            outputs=(
+                ArtifactOutput.directory(
+                    "compiled-triton", "compiled-triton", publish_on_failure=True
                 ),
-                memory_bytes=(
-                    4 * 1024**3
-                    if invocation.compiler.memory_bytes is None
-                    else invocation.compiler.memory_bytes
-                ),
-                outputs=(
-                    ArtifactOutput.directory(
-                        "compiled-triton", "compiled-triton", publish_on_failure=True
-                    ),
-                ),
-            )
-            if not 1000 <= (invocation.compiler.cpu_millicores or 0) <= 32000:
-                raise ValueError("Compiler CPU budget must be between 1000 and 32000 millicores")
-            invocation.grid = grid
-            # Serialize duplicate specialization requests so they do not tune twice.
-            with self._lock:
+            ),
+        )
+        if not 1000 <= (invocation.compiler.cpu_millicores or 0) <= 32000:
+            raise ValueError("Compiler CPU budget must be between 1000 and 32000 millicores")
+        invocation.grid = grid
+        # Serialize duplicate specialization requests so they do not tune twice.
+        with self._lock:
+            if options is None:
                 return invocation._compile(args, kwargs)
+            return invocation._benchmark(args, kwargs, options)
 
-        return launch
-
-    def _compile(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+    def _compile(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any], *, execute: bool = True
+    ) -> Any:
         import triton  # type: ignore[import-not-found]
 
         jit, configs = validate_kernel(self.kernel)  # Revalidate mutable wrappers at invocation.
@@ -296,7 +304,9 @@ class TritonKernel:
         cache_key = (id(self.compiler.app.client), key)
         if cache_key in self._cache:
             cached = self._cache[cache_key]
-            return self._execute(cached, inputs, args, argument_kwargs)
+            if execute:
+                return self._execute(cached, inputs, args, argument_kwargs)
+            return cached, inputs, key, True
         probe = self.gpu_function.spawn()
         target = probe.wait()
         if not isinstance(target, dict) or target.get("backend") != "cuda":
@@ -361,7 +371,53 @@ class TritonKernel:
         report["target"] = target
         self._cache[cache_key] = cached
         self._results[key] = _freeze(report)
-        return self._execute(cached, inputs, args, argument_kwargs)
+        if execute:
+            return self._execute(cached, inputs, args, argument_kwargs)
+        return cached, inputs, key, False
+
+    def _benchmark(
+        self, args: tuple[Any, ...], kwargs: dict[str, Any], options: KernelBenchmark
+    ) -> Any:
+        cached, inputs, key, reused = self._compile(args, kwargs, execute=False)
+        import cloudpickle
+
+        grid, evaluate = cloudpickle.loads(cached["callbacks"])
+        reset, restore = reset_arguments(self.kernel)
+        jit, _ = validate_kernel(self.kernel)
+        policy = options.tuning_policy()
+        function = replace(self.gpu_function, handler=triton_quick_runner.benchmark_selected)
+        calls: list[str] = []
+        report = benchmark_shards(
+            function,
+            [cached["variant"]],
+            {
+                "source": cached["source"],
+                "kernel_name": cached["kernel_name"],
+                "artifacts": cached["artifacts"],
+                "metadata": inputs["metadata"],
+                "callbacks": cloudpickle.dumps((grid, evaluate)),
+                "inputs": inputs,
+                "reset_arguments": reset,
+                "restore_arguments": restore,
+                "argument_names": jit.arg_names,
+                "target": cached["target"],
+                "triton_version": cached["triton_version"],
+                "policy": policy.request(),
+            },
+            policy,
+            calls,
+        )
+        winner = next(row for row in report["results"] if row["id"] == report["best_id"])
+        report.update(
+            specialization=key,
+            reused_specialization=reused,
+            autotuned=not reused and self.tuning is not None,
+            runtime_us=report["best_runtime_us"],
+            configuration=cached["variant"],
+            replicas=winner["replicas"],
+            input_metadata=inputs["metadata"],
+        )
+        return _freeze(report)
 
     def _execute(
         self,

@@ -1,4 +1,4 @@
-"""Compile an ordinary Triton autotuned kernel through vFunc without launching."""
+"""Compile, tune, and execute an ordinary Triton kernel through vFunc."""
 
 from __future__ import annotations
 
@@ -19,30 +19,20 @@ def add(X, Y, N: tl.constexpr, BLOCK: tl.constexpr):
     tl.store(Y + offsets, x + 1, offsets < N)
 
 
-def make_inputs(metadata):
-    raise RuntimeError("This example only compiles; input generation is unused")
-
-
-def reset_inputs(*args, **kwargs):
-    pass
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True, help="registered image matching local Triton")
     parser.add_argument("--gpu", default="gb300")
     args = parser.parse_args()
     app = vfunc.App("triton-compile", image=vfunc.Image(args.image))
-    kernel = vfunc.TritonKernel(add, make_inputs=make_inputs, reset_inputs=reset_inputs)
-    x = torch.empty(1024)  # CPU tensors suffice: only argument metadata is sent.
+    kernel = vfunc.TritonKernel(add)
+    x = torch.arange(65536, dtype=torch.float32)  # CPU contents are transported to the GPU.
     out = torch.empty_like(x)
-    try:
-        with app.function(gpu=args.gpu):
-            kernel[lambda meta: (triton.cdiv(1024, meta["BLOCK"]),)](x, out, N=1024)
-    except vfunc.TritonExecutionNotImplementedError as error:
-        print(f"Calls: {error.call_ids}")
-        for variant in error.report["results"]:
-            print(variant)
+    with app.function(gpu=args.gpu):
+        kernel[lambda meta: (triton.cdiv(meta["N"], meta["BLOCK"]),)](x, out, N=x.numel())
+    torch.testing.assert_close(out, x + 1)
+    for specialization, result in kernel.tuning_results.items():
+        print(specialization, result["benchmark"]["best_configuration"])
 
 
 if __name__ == "__main__":

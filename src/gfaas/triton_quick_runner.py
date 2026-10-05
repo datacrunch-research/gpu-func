@@ -852,7 +852,20 @@ def benchmark_cycle(
                 row["status"] = "measured"
                 if not check(row, candidate):
                     continue
-                estimate = (estimates or {})[row["id"]]
+                if estimates is None:
+                    samples = ring_trials(
+                        [candidate],
+                        [settings.get("pilot_trials", 3)],
+                        ring,
+                        torch,
+                        flush,
+                        settings.get("l2_flush_iterations", 100),
+                    )[0]
+                    estimate = min(samples)
+                    row.update(refined_us=estimate, estimate_trial_us=samples)
+                else:
+                    estimate = estimates[row["id"]]
+                    row["refined_us"] = estimate
             elif row.get("status") == "measured":
                 estimate = row["refined_us"]
             else:
@@ -953,3 +966,9 @@ def execute_winner(
         candidate(*args, **kwargs)
         torch.cuda.synchronize()
         return snapshot_inputs(args, kwargs)
+
+
+def benchmark_selected(**kwargs: Any) -> dict[str, Any]:
+    """Measure only the selected variant, with a fresh launch-duration estimate."""
+    kwargs["final_only"] = True
+    return benchmark_cycle(**kwargs)

@@ -24,16 +24,6 @@ def evaluate(candidate, x, out, *, N) -> bool:
     return bool(torch.allclose(out, x + 1))
 
 
-def make_inputs(metadata):
-    spec = metadata["args"][0]
-    x = torch.randn(spec["shape"], dtype=getattr(torch, spec["dtype"]), device="cuda")
-    return (x, torch.empty_like(x)), {"N": metadata["kwargs"]["N"]["value"]}
-
-
-def reset_inputs(x, out, *, N):
-    out.zero_()
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
@@ -42,20 +32,18 @@ def main() -> None:
     app = vfunc.App("quick-benchmark", image=vfunc.Image(args.image))
     kernel = vfunc.TritonKernel(
         add,
-        make_inputs=make_inputs,
-        reset_inputs=reset_inputs,
         tuning=vfunc.TritonTuning(
-            pilot_pruning=vfunc.TritonPruning(relative_delta=1.0, absolute_us=1.0),
-            refined_pruning=vfunc.TritonPruning(relative_delta=0.10, absolute_us=1.0),
             evaluate=evaluate,
             replication_factor=3,
         ),
     )
-    x = torch.arange(4096, dtype=torch.float32)
+    x = torch.arange(65536, dtype=torch.float32)
     out = torch.empty_like(x)
     with app.function(gpu=args.gpu, cpu_millicores=4000):
-        report = kernel[lambda meta: (triton.cdiv(meta["N"], meta["BLOCK"]),)](x, out, N=x.numel())
-    print(report["benchmark"])
+        kernel[lambda meta: (triton.cdiv(meta["N"], meta["BLOCK"]),)](x, out, N=x.numel())
+    torch.testing.assert_close(out, x + 1)
+    for specialization, result in kernel.tuning_results.items():
+        print(specialization, result["benchmark"])
 
 
 if __name__ == "__main__":
