@@ -55,7 +55,7 @@ class KernelBenchmark:
 
 
 class Kernel(ABC):
-    """Base for vFunc-managed kernel calls; currently implemented by TritonKernel."""
+    """Base for vFunc-managed kernels and their launch handles."""
 
     def __getitem__(self, grid: Any) -> KernelCall:
         return KernelCall(self, grid)
@@ -86,7 +86,8 @@ def benchmark(
     """Autotune if necessary, then freshly measure the winner on distinct GPUs.
 
     Use benchmark(kernel[grid], *args, options=KernelBenchmark(...), **kwargs)
-    inside app.function. Benchmarking leaves the caller's tensors unchanged.
+    for Triton, or benchmark(kernel, *args) for callable Helion kernels, inside
+    app.function. Benchmarking leaves the caller's tensors unchanged.
     """
     if isinstance(call, Kernel) and callable(call):
         call = KernelCall(call, None)
