@@ -145,3 +145,27 @@ def test_generated_integer_tensor_arguments_use_triton_compiler_types(monkeypatc
     monkeypatch.setitem(sys.modules, "triton.language", language)
     tensor = SimpleNamespace(dtype="torch." + dtype, data_ptr=lambda: None)
     assert argument_type(tensor, SimpleNamespace(is_constexpr=False)) == "*" + kind
+
+
+def test_l2_flush_buffer_uses_the_current_replica_gpu(monkeypatch):
+    allocations = []
+    attributes = []
+
+    def attribute(size, name, device):
+        size._obj.value = 1024
+        attributes.append((name, device))
+        return 0
+
+    monkeypatch.setattr(
+        triton_quick_runner.ctypes,
+        "CDLL",
+        lambda _: SimpleNamespace(cuDeviceGetAttribute=attribute),
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(current_device=lambda: 2),
+        uint8="uint8",
+        empty=lambda *a, **kw: allocations.append((a, kw)),
+    )
+    triton_quick_runner.l2_flush_buffer(torch)
+    assert attributes == [(38, 2)]
+    assert allocations == [((2048,), {"dtype": "uint8", "device": "cuda:2"})]

@@ -158,11 +158,13 @@ def bound_candidate(
 def l2_flush_buffer(torch: Any) -> Any:
     cuda = ctypes.CDLL("libcuda.so.1")
     size = ctypes.c_int()
-    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE. The job exposes one device.
+    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE, for the current replica GPU.
     status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, torch.cuda.current_device())
     if status or size.value <= 0:
         raise RuntimeError("Cannot determine GPU L2 cache size")
-    return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
+    return torch.empty(
+        2 * size.value, dtype=torch.uint8, device=f"cuda:{torch.cuda.current_device()}"
+    )
 
 
 def measure_quick(
