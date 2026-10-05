@@ -178,3 +178,27 @@ def test_helion_backend_and_specialization_callbacks_are_rejected(native):
     native._key_fn = lambda x: 1
     with pytest.raises(gfaas.UnsupportedHelionKernelError, match="specialization"):
         gfaas.HelionKernel(native)
+
+
+GLOBAL_OPTIONS = (64, 128)
+NON_LITERAL_OPTIONS = (float("nan"),)
+
+
+def finite_options(x):
+    return x + GLOBAL_OPTIONS[0]
+
+
+def non_literal_options(x):
+    return x + NON_LITERAL_OPTIONS[0]
+
+
+def test_source_constants_are_valid_before_remote_preparation(native):
+    from gfaas.helion_compat import source_bundle
+
+    native.fn = finite_options
+    namespace = {}
+    exec(source_bundle(native), namespace)
+    assert namespace["finite_options"](1) == 65
+    native.fn = non_literal_options
+    with pytest.raises(gfaas.UnsupportedHelionKernelError, match="cannot be transported"):
+        source_bundle(native)

@@ -73,12 +73,19 @@ def source_bundle(kernel: Any) -> str:
             "torch",
             "helion",
             "math",
+            "typing",
         ):
             imports.append(f"import {value.__name__} as {name}")
         elif value is None or type(value) in (bool, int, float, str, tuple):
+            try:
+                ast.literal_eval(repr(value))
+            except (ValueError, SyntaxError) as error:
+                raise UnsupportedHelionKernelError(
+                    f"Helion source constant cannot be transported: {name}"
+                ) from error
             constants.append(f"{name} = {value!r}")
         elif (
-            getattr(value, "__module__", "").split(".")[0] in ("torch", "helion")
+            getattr(value, "__module__", "").split(".")[0] in ("torch", "helion", "typing")
             and getattr(value, "__name__", "").isidentifier()
         ):
             imports.append(f"from {value.__module__} import {value.__name__} as {name}")
