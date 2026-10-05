@@ -546,5 +546,6 @@ Normal execution uses the values supplied by the caller and copies all tensor
 writes back. CUDA context poisoning still fails the worker Call; durable
 checkpoint/restart is not implemented.
 
-See `examples/thunderkittens_kernels.py` for complete vector-add, in-place exp and
-BF16 matmul definitions, correctness callbacks, launchers and configuration sets.
+See `examples/thunderkittens_kernels.py` for complete vector-add, in-place exp,
+BF16 matmul and raw CUDA definitions, correctness callbacks, launchers and
+configuration sets.

@@ -1,4 +1,4 @@
-"""Three real ThunderKittens kernels: vector add, in-place exp, and BF16 matmul.
+"""ThunderKittens kernels: vector add, in-place exp, BF16 matmul, and raw CUDA scaling.
 
 Clone HazyResearch/ThunderKittens and pass its include directory via --headers.
 The selected vFunc image must provide compatible CUDA/nvcc, C++20 and PyTorch.
@@ -92,6 +92,28 @@ extern "C" int launch(bf16* a, bf16* b, float* c, int m, int n, int k, VFUNC_LAU
 """
 
 
+RAW_SCALE = r"""
+#include "kittens.cuh"
+extern "C" __global__ __launch_bounds__(BLOCK) void scale(float* x, float* y, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    kittens::rv_fl<32> value;
+    value[0][0] = i < n ? x[i] : 0.f;
+    kittens::warp::mul(value, value, 2.f);
+    if (i < n) y[i] = value[0][0];
+}
+"""
+
+
+def raw_grid(meta):
+    return ((meta["N"] + meta["BLOCK"] - 1) // meta["BLOCK"],)
+
+
+def evaluate_scale(candidate, x, y, N):
+    original = x.clone()
+    candidate(x, y, N)
+    return bool(torch.equal(y, original * 2))
+
+
 def vector_grid(meta):
     return (
         (meta["N"] + meta["TILE"] * (meta["block"][0] // 32) - 1)
@@ -126,6 +148,22 @@ def make_examples(headers):
         for warps in (2, 4)
     ]
     return {
+        "raw": (
+            vfunc.ThunderKittensKernel(
+                RAW_SCALE,
+                "scale",
+                entrypoint_kind="kernel",
+                signature={"X": "pointer", "Y": "pointer", "N": "int32"},
+                headers=headers,
+                configs=[
+                    vfunc.ThunderKittensConfig({"BLOCK": block}, block=(block,))
+                    for block in (128, 256)
+                ],
+                tuning=vfunc.TritonTuning(evaluate=evaluate_scale),
+                restore_value=("X",),
+            ),
+            raw_grid,
+        ),
         "add": (
             vfunc.ThunderKittensKernel(
                 VECTOR_ADD,
@@ -190,8 +228,11 @@ def main():
     size = 256
     ma = torch.randn(size, size, dtype=torch.bfloat16) * 0.1
     mb = torch.randn(size, size, dtype=torch.bfloat16) * 0.1
+    raw = torch.randn(n)
+    expected_raw = raw.clone() * 2
     expected_exp = x.exp()
     calls = {
+        "raw": (raw, raw, n),
         "add": (a, b, torch.zeros(n), n),
         "exp": (x, n),
         "matmul": (ma, mb, torch.zeros(size, size), size, size, size),
@@ -203,6 +244,7 @@ def main():
             cached = vfunc.benchmark(kernel[grid], *values)
             kernel[grid](*values)
             print(name, first["runtime_us"], cached["runtime_us"], cached["configuration"])
+    assert torch.equal(raw, expected_raw)
     assert torch.allclose(calls["add"][2], a + b, rtol=1e-5, atol=1e-6)
     assert torch.allclose(x, expected_exp, rtol=1e-5, atol=1e-6)
     assert torch.allclose(calls["matmul"][2], ma.float() @ mb.float(), rtol=0.02, atol=0.03)

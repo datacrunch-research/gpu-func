@@ -241,3 +241,46 @@ def test_entrypoint_abi_checks_cover_host_bridge_and_scalar_types():
     assert "cudaStream_t" in checks
     raw = entrypoint_checks("kernel", {"X": "pointer"}, "kernel")
     assert "== 1" in raw and "result, void" in raw
+
+
+def test_raw_module_load_establishes_context_before_driver_call(monkeypatch):
+    import sys
+
+    from gfaas import cuda_kernel_runner as runner
+
+    events = []
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            cuda=SimpleNamespace(
+                current_device=lambda: 2,
+                set_device=lambda device: events.append(("context", device)),
+            )
+        ),
+    )
+
+    class Driver:
+        def cuModuleLoadData(self, *args):
+            assert events == [("context", 2)]
+            events.append(("module",))
+            return 0
+
+        def cuModuleGetFunction(self, *args):
+            return 0
+
+        def cuLaunchKernel(self, *args):
+            return 0
+
+    driver = Driver()
+    # ctypes function objects accept argtypes; use a callable instance here too.
+    driver.cuLaunchKernel = SimpleNamespace()
+    monkeypatch.setattr(runner.ctypes, "CDLL", lambda name: driver)
+    candidate = runner.load_candidate(
+        b"cubin",
+        "scale",
+        {"entrypoint_kind": "kernel", "shared_memory": 0, "signature": {"N": "int32"}},
+        (1,),
+    )
+    assert callable(candidate)
+    assert events == [("context", 2), ("module",)]

@@ -204,6 +204,9 @@ def load_candidate(binary: bytes, kernel_name: str, variant: dict[str, Any], gri
 
     if variant["entrypoint_kind"] == "launcher":
         return load_host_launcher(binary, kernel_name, variant, grid)
+    # CUDA 12+ cudaSetDevice initializes the selected primary context, including
+    # for scalar-only kernels that did not allocate any input tensors.
+    torch.cuda.set_device(torch.cuda.current_device())
     cuda = ctypes.CDLL("libcuda.so.1")
     module, function = ctypes.c_void_p(), ctypes.c_void_p()
     image = ctypes.create_string_buffer(binary)
@@ -324,8 +327,10 @@ def execute(
         raise RuntimeError("CUDA execution target changed")
     records = load_binaries(artifacts, source, kernel_name, target, {variant["id"]})
     grid, _ = cloudpickle.loads(callbacks)
-    candidate = load_candidate(records[variant["id"]]["binary"], kernel_name, variant, grid)
+    # Tensor allocation establishes the current CUDA context before the Driver
+    # API loads a raw cubin. Device discovery alone need not create that context.
     args, kwargs = SnapshotInputs(inputs, [], [], list(variant["signature"]))(inputs["metadata"])
+    candidate = load_candidate(records[variant["id"]]["binary"], kernel_name, variant, grid)
     candidate(*args, **kwargs)
     torch.cuda.synchronize()
     return snapshot_inputs(args, kwargs)
