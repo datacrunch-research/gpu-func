@@ -322,10 +322,16 @@ class TritonKernel(Kernel):
         report["target_probe_call_id"] = probe.call_id
         report["next_phase"] = "execution"
         artifacts = []
+        artifact_variants = {}
         for identity in compile_ids:
             result = self.compiler.app.client.get_call_result(identity)
             output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
-            artifacts.append(ArtifactRef(output["artifact_id"]))
+            artifact = ArtifactRef(output["artifact_id"])
+            artifacts.append(artifact)
+            shard = next((s for s in report.get("shards", []) if s["call_id"] == identity), None)
+            if shard:
+                for row in shard["report"]["results"]:
+                    artifact_variants[row["id"]] = artifact
         if self.tuning is not None:
             benchmark = replace(self.gpu_function, handler=triton_quick_runner.benchmark_cycle)
             report["benchmark"] = benchmark_shards(
@@ -357,7 +363,9 @@ class TritonKernel(Kernel):
             "source": source,
             "kernel_name": jit.fn.__name__,
             "variant": winner,
-            "artifacts": artifacts,
+            "artifacts": [artifact_variants[winner["id"]]]
+            if winner["id"] in artifact_variants
+            else artifacts,
             "callbacks": callbacks,
             "target": target,
             "triton_version": triton.__version__,
@@ -404,6 +412,7 @@ class TritonKernel(Kernel):
             },
             policy,
             calls,
+            single_job=True,
         )
         winner = next(row for row in report["results"] if row["id"] == report["best_id"])
         report.update(
