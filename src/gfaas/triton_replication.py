@@ -28,6 +28,7 @@ def benchmark_shards(
     policy: TritonTuning,
     call_ids: list[str],
     *,
+    replica_handler: Any = None,
     single_job: bool = False,
 ) -> dict[str, Any]:
     states: dict[str, dict[str, Any]] = {}
@@ -69,7 +70,7 @@ def benchmark_shards(
             if single_job and isinstance(function, Function):
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_selected_replicas,
+                    handler=replica_handler or triton_quick_runner.benchmark_selected_replicas,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )
@@ -77,7 +78,7 @@ def benchmark_shards(
             elif final_only and isinstance(function, Function) and policy.replication_factor > 1:
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_replicas,
+                    handler=replica_handler or triton_quick_runner.benchmark_replicas,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )

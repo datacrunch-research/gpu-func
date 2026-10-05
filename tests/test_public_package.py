@@ -15,6 +15,12 @@ MARKDOWN_LINK = re.compile(r"\[[^]]*]\(([^)]+)\)")
 def test_documented_public_sdk_surface_is_available() -> None:
     expected = {
         "App",
+        "HelionKernel",
+        "HelionCompilationError",
+        "UnsupportedHelionKernelError",
+        "KernelTuning",
+        "KernelPruning",
+        "KernelTiming",
         "Kernel",
         "KernelBenchmark",
         "benchmark",

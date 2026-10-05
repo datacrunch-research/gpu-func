@@ -28,6 +28,12 @@ from .stages import CallStage, StageArtifactBinding
 
 __all__ = [
     "App",
+    "HelionKernel",
+    "HelionCompilationError",
+    "UnsupportedHelionKernelError",
+    "KernelTuning",
+    "KernelPruning",
+    "KernelTiming",
     "Kernel",
     "KernelBenchmark",
     "benchmark",
@@ -69,6 +75,25 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name in {"HelionKernel", "HelionCompilationError"}:
+        from . import helion_kernel
+
+        return getattr(helion_kernel, name)
+    if name == "UnsupportedHelionKernelError":
+        from .helion_compat import UnsupportedHelionKernelError
+
+        return UnsupportedHelionKernelError
+    if name in {"KernelTuning", "KernelPruning", "KernelTiming"}:
+        from . import triton_policy
+
+        return getattr(
+            triton_policy,
+            {
+                "KernelTuning": "TritonTuning",
+                "KernelPruning": "TritonPruning",
+                "KernelTiming": "TritonBenchmark",
+            }[name],
+        )
     if name in {"Client", "RemoteResult"}:
         from .client import Client, RemoteResult
 
