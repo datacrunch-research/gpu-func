@@ -259,5 +259,10 @@ def argument_type(value: Any, parameter: Any) -> str:
             scalar = str(dtype)
         except AttributeError as error:
             raise UnsupportedTritonKernelError(f"Unsupported tensor dtype: {name}") from error
+        # Language dtype names use int32/uint32; ASTSource expects i32/u32.
+        if scalar.startswith("uint"):
+            scalar = "u" + scalar[4:]
+        elif scalar.startswith("int"):
+            scalar = "i" + scalar[3:]
         return ("*k" if getattr(parameter, "is_const", False) else "*") + scalar
     raise UnsupportedTritonKernelError(f"Unsupported argument type: {type(value).__name__}")

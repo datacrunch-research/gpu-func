@@ -511,5 +511,5 @@ This implementation accepts flat tensor/scalar arguments, fixed configuration li
 and the Triton backend. Custom specialization callbacks and closures are rejected.
 The adapter to Helion's generated `_launcher` parameter is capability-checked; an
 unrecognized generated launcher fails explicitly. See `examples/helion_kernels.py`
-for vector addition, row reduction, BF16 matmul, in-place mutation, and a multi-launch
+for vector addition, row reduction, BF16 matmul, in-place mutation, and a grid-barrier
 function returning both intermediate and reduced tensors.

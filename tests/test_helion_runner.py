@@ -129,3 +129,16 @@ def test_loaded_signature_restores_function_order_after_sorted_json(tmp_path, mo
         {},
     )
     assert observed == [["x", "output", "size"]]
+
+
+@pytest.mark.parametrize(
+    "dtype,kind", [("uint32", "u32"), ("int32", "i32"), ("int64", "i64"), ("float32", "fp32")]
+)
+def test_generated_integer_tensor_arguments_use_triton_compiler_types(monkeypatch, dtype, kind):
+    from gfaas.triton_compat import argument_type
+
+    language = ModuleType("triton.language")
+    setattr(language, dtype, {"float32": "fp32"}.get(dtype, dtype))
+    monkeypatch.setitem(sys.modules, "triton.language", language)
+    tensor = SimpleNamespace(dtype="torch." + dtype, data_ptr=lambda: None)
+    assert argument_type(tensor, SimpleNamespace(is_constexpr=False)) == "*" + kind

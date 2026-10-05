@@ -61,7 +61,7 @@ def square_and_sum(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     output = torch.empty((x.size(0),), dtype=x.dtype, device=x.device)
     for row, column in hl.tile(x.shape):
         squared[row, column] = x[row, column] * x[row, column]
-    # A separate GPU launch must complete the producer before the reduction.
+    # The grid-wide barrier makes the squared values visible to the reduction.
     hl.barrier()
     for row in hl.tile(x.size(0)):
         output[row] = squared[row, :].sum(-1)
