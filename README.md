@@ -427,12 +427,13 @@ phase: CUDA graphs for short kernels, direct events for longer kernels or when
 graph padding would exceed memory limits. Estimates size the graph and trial
 counts; the final duration is an estimated compute budget, rather than a wall-time
 deadline. `max_final_trials` counts graph replays or individual direct calls.
-Replication uses the same verified distinct-GPU scheme as autotuning, with no
-configuration pruning because only the selected variant is benchmarked. Initial
-measurement counts toward the replication factor; replica calls reuse that fresh
-duration estimate. There is currently one variant per job, so the concurrency
-limit only bounds replica dispatch and does not increase parallelism within a
-multi-GPU replica call.
+Standalone replication reserves all R GPUs in one job. The job verifies and
+restores the selected configuration once, then estimates and measures it on each
+GPU separately. Physical GPU UUIDs must be distinct. No configuration pruning
+is needed. The selected compiler shard remains a compressed batch: its archive
+is scanned, but only the winner's cache files are restored. Other compiler
+shards are not requested. The concurrency setting does not parallelize devices
+within this job.
 
 The returned report is immutable and includes `runtime_us`, `configuration`,
 `replicas`, `specialization`, `autotuned`, `reused_specialization`, raw shard

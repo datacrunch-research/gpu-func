@@ -27,6 +27,8 @@ def benchmark_shards(
     request: dict[str, Any],
     policy: TritonTuning,
     call_ids: list[str],
+    *,
+    single_job: bool = False,
 ) -> dict[str, Any]:
     states: dict[str, dict[str, Any]] = {}
     history: list[dict[str, Any]] = []
@@ -64,7 +66,15 @@ def benchmark_shards(
         try:
             worker = function
             extra = {}
-            if final_only and isinstance(function, Function) and policy.replication_factor > 1:
+            if single_job and isinstance(function, Function):
+                worker = replace(
+                    function,
+                    handler=triton_quick_runner.benchmark_selected_replicas,
+                    gpu=None,
+                    gpu_count=policy.replication_factor,
+                )
+                extra = {"device_count": policy.replication_factor}
+            elif final_only and isinstance(function, Function) and policy.replication_factor > 1:
                 worker = replace(
                     function,
                     handler=triton_quick_runner.benchmark_replicas,
@@ -76,7 +86,7 @@ def benchmark_shards(
                 **request,
                 **extra,
                 variants=json.dumps(chunk),
-                final_only=final_only,
+                final_only=final_only or single_job,
                 excluded_gpu_uuids=list(excluded),
                 estimates={v["id"]: states[v["id"]]["refined_us"] for v in chunk}
                 if final_only
@@ -133,7 +143,7 @@ def benchmark_shards(
                         continue
                     for row in output["results"]:
                         identity = row["id"]
-                        if not final_only:
+                        if not final_only and identity not in states:
                             states[identity] = {**row, "replicas": [], "attempts": 0}
                         state = states[identity]
                         if row.get("status") == "invalid" and state["replicas"]:

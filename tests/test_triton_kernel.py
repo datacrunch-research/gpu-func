@@ -632,7 +632,7 @@ def test_launch_benchmark_autotunes_when_cold_reuses_winner_and_replicates(launc
             data = request["kwargs"]
             if name == "execute_winner":
                 return SimpleNamespace(call_id="execute", wait=lambda: data["inputs"])
-            if name in ("benchmark_cycle", "benchmark_selected", "benchmark_replicas"):
+            if name in ("benchmark_cycle", "benchmark_selected_replicas", "benchmark_replicas"):
                 self.sequence += 1
                 variants = json.loads(data["variants"])
 
@@ -654,8 +654,9 @@ def test_launch_benchmark_autotunes_when_cold_reuses_winner_and_replicates(launc
 
                 if name == "benchmark_cycle":
                     result = report("gpu0", 10)
-                elif name == "benchmark_selected":
-                    result = report("gpu0", 12)
+                elif name == "benchmark_selected_replicas":
+                    assert request["gpu_count"] == 2
+                    result = {"replica_reports": [report("gpu0", 12), report("gpu1", 14)]}
                 else:
                     result = {"replica_reports": [report("gpu1", 14), report("gpu2", 13)]}
                 return SimpleNamespace(call_id=f"bench_{self.sequence}", wait=lambda: result)
@@ -680,8 +681,8 @@ def test_launch_benchmark_autotunes_when_cold_reuses_winner_and_replicates(launc
     assert client.phases.count("compile_batch") == 1
     assert client.phases.count("benchmark_cycle") == 1
     assert client.phases.count("execute_winner") == int(launch_first)
-    assert client.phases.count("benchmark_selected") == 2
-    assert client.phases.count("benchmark_replicas") == 2
+    assert client.phases.count("benchmark_selected_replicas") == 2
+    assert client.phases.count("benchmark_replicas") == 0
     assert first["runtime_us"] == 13
     assert {r["gpu_uuid"] for r in first["replicas"]} == {"gpu0", "gpu1"}
     assert first["configuration"] == second["configuration"]

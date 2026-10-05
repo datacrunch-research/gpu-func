@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import ctypes
 import hashlib
 import importlib.util
@@ -13,6 +14,7 @@ import os
 import sys
 import tarfile
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -45,7 +47,12 @@ def select_rows(
 
 
 def restore_caches(
-    artifacts: list[Any], destination: Path, source: str, target: dict[str, Any], version: str
+    artifacts: list[Any],
+    destination: Path,
+    source: str,
+    target: dict[str, Any],
+    version: str,
+    selected_ids: set[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     records: dict[str, dict[str, Any]] = {}
     for artifact in artifacts:
@@ -57,6 +64,25 @@ def restore_caches(
             or manifest["triton_version"] != version
         ):
             raise RuntimeError("Compiled artifact does not match source, target or Triton version")
+        selected_files = manifest["files"]
+        selected_results = manifest["results"]
+        if selected_ids is not None:
+            selected_results = [r for r in selected_results if r["id"] in selected_ids]
+            directories: set[str] = set()
+            for result in selected_results:
+                # Triton uses hexadecimal cache keys in older releases and
+                # base32 keys in newer ones. Reject unknown layouts explicitly.
+                digest = result["cache_hash"]
+                directories.update(
+                    (digest, base64.b32encode(bytes.fromhex(digest)).decode().rstrip("="))
+                )
+            selected_files = {
+                name: digest
+                for name, digest in manifest["files"].items()
+                if len(Path(name).parts) > 2 and Path(name).parts[1] in directories
+            }
+            if selected_results and not selected_files:
+                raise RuntimeError("Unsupported Triton cache layout for selected configuration")
         archive = root / "cache.tar.gz"
         if hashlib.sha256(archive.read_bytes()).hexdigest() != manifest["cache_archive"]["sha256"]:
             raise RuntimeError("Compiler archive checksum mismatch")
@@ -75,6 +101,8 @@ def restore_caches(
                     continue
                 if not member.isfile() or member.name in found:
                     raise RuntimeError("Unsafe or duplicate compiler cache entry")
+                if member.name not in selected_files:
+                    continue
                 handle = tar.extractfile(member)
                 assert handle is not None
                 data = handle.read()
@@ -87,12 +115,14 @@ def restore_caches(
                 if output.exists() and output.read_bytes() != data:
                     raise RuntimeError("Conflicting compiler cache files")
                 output.write_bytes(data)
-        if found != manifest["files"]:
+        if found != selected_files:
             raise RuntimeError("Incomplete compiler archive")
-        for result in manifest["results"]:
+        for result in selected_results:
             if result["id"] in records:
                 raise RuntimeError("Duplicate compiled variant")
             records[result["id"]] = result
+    if selected_ids is not None and set(records) != selected_ids:
+        raise RuntimeError("Missing compiled configuration in selected artifacts")
     # Triton cache group manifests contain absolute paths from the CPU worker.
     for group in destination.rglob("__grp__*.json"):
         data = json.loads(group.read_text())
@@ -666,6 +696,7 @@ def benchmark_cycle(
     reset_arguments: list[str] | None = None,
     restore_arguments: list[str] | None = None,
     argument_names: list[str] | None = None,
+    prepared_cache: tuple[str, dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     import cloudpickle
     import torch
@@ -705,10 +736,19 @@ def benchmark_cycle(
         policy["max_input_sets"],
         policy["max_ring_bytes"],
     )
-    with tempfile.TemporaryDirectory(prefix="vfunc-ring-") as folder:
+    context = (
+        nullcontext(prepared_cache[0])
+        if prepared_cache
+        else tempfile.TemporaryDirectory(prefix="vfunc-ring-")
+    )
+    with context as folder:
         cache = Path(folder) / "cache"
-        cache.mkdir()
-        prepared = restore_caches(artifacts, cache, source, target, triton_version)
+        cache.mkdir(exist_ok=True)
+        prepared = (
+            prepared_cache[1]
+            if prepared_cache
+            else restore_caches(artifacts, cache, source, target, triton_version)
+        )
         os.environ["TRITON_CACHE_DIR"] = str(cache)
         if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
             triton.knobs.cache.dir = str(cache)
@@ -972,3 +1012,33 @@ def benchmark_selected(**kwargs: Any) -> dict[str, Any]:
     """Measure only the selected variant, with a fresh launch-duration estimate."""
     kwargs["final_only"] = True
     return benchmark_cycle(**kwargs)
+
+
+def benchmark_selected_replicas(*, device_count: int, **kwargs: Any) -> dict[str, Any]:
+    """Load only selected binaries once, then measure each assigned GPU."""
+    import torch
+
+    if torch.cuda.device_count() != device_count:
+        raise RuntimeError("Benchmark Call did not receive its requested GPU count")
+    selected = {v["id"] for v in json.loads(kwargs["variants"])}
+    with tempfile.TemporaryDirectory(prefix="vfunc-selected-") as folder:
+        cache = Path(folder) / "cache"
+        cache.mkdir()
+        prepared = restore_caches(
+            kwargs["artifacts"],
+            cache,
+            kwargs["source"],
+            kwargs["target"],
+            kwargs["triton_version"],
+            selected,
+        )
+        reports = []
+        for device in range(device_count):
+            with torch.cuda.device(device):
+                reports.append(benchmark_cycle(**kwargs, prepared_cache=(folder, prepared)))
+        return {
+            "status": "replica_bundle",
+            "replica_reports": reports,
+            "prepared_configurations": len(prepared),
+            "prepared_cache_files": sum(p.is_file() for p in cache.rglob("*")),
+        }
