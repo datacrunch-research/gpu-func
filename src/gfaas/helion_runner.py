@@ -75,16 +75,15 @@ def load_candidate(prepared: dict[str, Any], target: dict[str, Any]) -> Any:
             triton.knobs.cache.dir = str(cache)
         spec = unit["launch"]
         jit = getattr(module, spec["kernel_name"])
+        # JSON artifacts can reorder object keys. Triton launchers consume
+        # signature values in positional argument order, including constexprs.
+        kinds = {name: spec["signature"][name] for name in jit.arg_names}
         if "constexprs" in inspect.signature(ASTSource).parameters:
-            ast = ASTSource(jit, spec["signature"], constexprs=spec["constants"])
+            ast = ASTSource(jit, kinds, constexprs=spec["constants"])
         else:
             ast = ASTSource(
                 jit,
-                {
-                    jit.arg_names.index(k): v
-                    for k, v in spec["signature"].items()
-                    if v != "constexpr"
-                },
+                {jit.arg_names.index(k): v for k, v in kinds.items() if v != "constexpr"},
                 constants={jit.arg_names.index(k): v for k, v in spec["constants"].items()},
             )
         before = {

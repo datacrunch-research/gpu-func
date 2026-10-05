@@ -12,7 +12,9 @@ def test_launch_matching_uses_types_and_options_when_names_and_constants_match(
     def device(x):
         pass
 
-    jit = SimpleNamespace(fn=device, params=[SimpleNamespace(name="x", is_constexpr=False)])
+    jit = SimpleNamespace(
+        arg_names=["x"], fn=device, params=[SimpleNamespace(name="x", is_constexpr=False)]
+    )
     calls = []
 
     def host(x, _launcher):
@@ -86,3 +88,44 @@ def test_handlers_import_when_vfunc_loads_the_source_as_a_standalone_module(name
             else "benchmark_cycle",
         )
     )
+
+
+def test_loaded_signature_restores_function_order_after_sorted_json(tmp_path, monkeypatch):
+    def device(x, output, size):
+        pass
+
+    jit = SimpleNamespace(fn=device, arg_names=["x", "output", "size"])
+    module = SimpleNamespace(device=jit, host=lambda **kw: None)
+    observed = []
+    compiler = ModuleType("triton.compiler")
+
+    class ASTSource:
+        def __init__(self, fn, signature, constexprs):
+            observed.append(list(signature))
+
+    compiler.ASTSource = ASTSource
+    backend = ModuleType("triton.backends.compiler")
+    backend.GPUTarget = lambda **kw: kw
+    triton = ModuleType("triton")
+    triton.compile = lambda *a, **kw: SimpleNamespace(hash="hash")
+    for name, value in [
+        ("triton", triton),
+        ("triton.compiler", compiler),
+        ("triton.backends.compiler", backend),
+    ]:
+        monkeypatch.setitem(sys.modules, name, value)
+    spec = {
+        "kernel_name": "device",
+        "signature": {"output": "*fp32", "size": "constexpr", "x": "*fp32"},
+        "constants": {"size": 1024},
+        "options": {},
+    }
+    helion_runner.load_candidate(
+        {
+            "module": module,
+            "record": {"kernel_name": "host"},
+            "units": [{"cache": str(tmp_path), "launch": spec, "compiled": {"cache_hash": "hash"}}],
+        },
+        {},
+    )
+    assert observed == [["x", "output", "size"]]
