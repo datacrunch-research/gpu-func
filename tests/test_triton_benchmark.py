@@ -170,7 +170,16 @@ def test_long_kernel_final_events_have_at_least_25_iterations(monkeypatch):
     assert result["method"] == "events-ring"
 
 
-def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture():
+@pytest.mark.parametrize(
+    "settings,sets,graphs,calls,iterations,runtime",
+    [
+        (None, 300, 3, 100, 50, 2),
+        ({"graph_duration_ms": 0.1, "final_duration_ms": 2.0}, 220, 11, 20, 20, 10),
+    ],
+)
+def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
+    settings, sets, graphs, calls, iterations, runtime
+):
     log = []
 
     class Context:
@@ -229,12 +238,14 @@ def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
             Event=Event,
         )
     )
-    result = final_benchmark(lambda *a: None, 5, ring, torch, SimpleNamespace(zero_=lambda: None))
-    assert len(ring.sets) == 300 and result["graph_count"] == 3
-    assert result["calls_per_graph"] == 100 and result["iterations"] == 50
-    assert result["runtime_us"] == 2
+    result = final_benchmark(
+        lambda *a: None, 5, ring, torch, SimpleNamespace(zero_=lambda: None), settings
+    )
+    assert len(ring.sets) == sets and result["graph_count"] == graphs
+    assert result["calls_per_graph"] == calls and result["iterations"] == iterations
+    assert result["runtime_us"] == runtime
     replays = [identity for item in log if isinstance(item, tuple) for identity in [item[1]]]
-    assert replays[:6] == [0, 1, 2, 0, 1, 2]
+    assert replays[:6] == [i % graphs for i in range(6)]
 
 
 class FakeBenchmark:
@@ -385,3 +396,34 @@ def test_evaluation_inputs_cannot_alias_the_benchmark_ring():
     )
     with pytest.raises(ValueError, match="Evaluation inputs share"):
         ring.fresh()
+
+
+def test_custom_final_budget_and_iteration_cap_reach_gpu_runner(monkeypatch):
+    from gfaas import TritonBenchmark
+    from gfaas import triton_quick_runner as runner
+
+    counts = []
+    monkeypatch.setattr(runner, "ring_trials", lambda c, n, *a: counts.append(n) or [[4000] * n[0]])
+    settings = TritonBenchmark(final_duration_ms=1000, min_final_trials=5, max_final_trials=7)
+    request = TritonTuning(benchmark=settings).request()
+    result = final_benchmark(None, 4000, None, None, None, request["benchmark"])
+    assert counts == [[7]]
+    assert result["iterations"] == 7 and result["method"] == "events-ring"
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"pilot_trials": 0},
+        {"final_duration_ms": float("nan")},
+        {"graph_duration_ms": -1},
+        {"max_calls_per_graph": 5},
+        {"min_final_trials": 100_001},
+        {"l2_flush_iterations": True},
+    ],
+)
+def test_invalid_benchmark_budgets(options):
+    from gfaas import TritonBenchmark
+
+    with pytest.raises(ValueError):
+        TritonBenchmark(**options)

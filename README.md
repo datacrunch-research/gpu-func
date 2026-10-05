@@ -261,6 +261,44 @@ with app.function(gpu="gb300"):
 print(report["benchmark"]["best_configuration"])
 ```
 
+Benchmark counts and estimated compute durations remain configurable separately
+from pruning and resource limits:
+
+```python
+tuning = vfunc.TritonTuning(
+    pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
+    refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
+    benchmark=vfunc.TritonBenchmark(
+        pilot_trials=5,
+        refinement_duration_ms=10.0,
+        min_refinement_trials=10,
+        max_refinement_trials=100_000,
+        final_duration_ms=25.0,
+        min_final_trials=25,
+        max_final_trials=100_000,
+        graph_duration_ms=1.0,
+        min_calls_per_graph=10,
+        max_calls_per_graph=100,
+        l2_flush_iterations=100,
+    ),
+    quick_benchmark_group_size=8,
+    quick_benchmark_variants_per_job=256,
+    quick_benchmark_max_concurrent_jobs=4,
+    replication_factor=3,
+    replication_max_attempts=8,
+    max_input_sets=65_536,
+    max_ring_bytes=8 * 1024**3,
+)
+```
+
+Durations describe estimated kernel compute, not wall-clock deadlines. Refinement
+is skipped when its estimated trial count is below `min_refinement_trials`.
+Final direct-event measurements use at least `min_final_trials`; graph replay
+counts use at least one replay. Both are bounded by `max_final_trials` (counting
+replays on the graph path). Iteration caps can shorten the requested compute
+budget. Durations must be finite and positive, counts must be positive integers,
+and minimum counts must not exceed their maximums.
+
 Each round retains times <= `best + max(relative_delta * best, absolute_us)`.
 Defaults allow 25% or 1 us in the five-trial pilot, then 5% or 0.1 us in
 refinement and global replica reduction, whichever allowance is larger. The

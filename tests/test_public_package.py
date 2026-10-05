@@ -33,6 +33,7 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "StageArtifactBinding",
         "TritonKernel",
         "TritonTuning",
+        "TritonBenchmark",
         "TritonPruning",
         "TritonInputMetadata",
         "TritonBenchmarkError",

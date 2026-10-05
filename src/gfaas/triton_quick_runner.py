@@ -536,9 +536,14 @@ class InputRing:
 
 
 def ring_trials(
-    candidates: list[Any], counts: list[int], ring: InputRing, torch: Any, flush: Any
+    candidates: list[Any],
+    counts: list[int],
+    ring: InputRing,
+    torch: Any,
+    flush: Any,
+    flush_iterations: int = 100,
 ) -> list[list[float]]:
-    for _ in range(100):
+    for _ in range(flush_iterations):
         flush.zero_()
     events: list[list[Any]] = [[] for _ in candidates]
     for iteration in range(max(counts)):
@@ -557,12 +562,29 @@ def ring_trials(
 
 
 def final_benchmark(
-    candidate: Any, estimate_us: float, ring: InputRing, torch: Any, flush: Any
+    candidate: Any,
+    estimate_us: float,
+    ring: InputRing,
+    torch: Any,
+    flush: Any,
+    benchmark: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    z = max(1, min(100, math.floor(1000 / estimate_us)))
-    if z < 10:
-        count = max(25, math.ceil(25_000 / estimate_us))
-        trials = ring_trials([candidate], [count], ring, torch, flush)[0]
+    settings = benchmark or {}
+    flush_iterations = settings.get("l2_flush_iterations", 100)
+    final_us = settings.get("final_duration_ms", 25.0) * 1000
+    maximum = settings.get("max_final_trials", 100_000)
+    z = max(
+        1,
+        min(
+            settings.get("max_calls_per_graph", 100),
+            math.floor(settings.get("graph_duration_ms", 1.0) * 1000 / estimate_us),
+        ),
+    )
+    if z < settings.get("min_calls_per_graph", 10):
+        count = min(
+            maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
+        )
+        trials = ring_trials([candidate], [count], ring, torch, flush, flush_iterations)[0]
         return {
             "runtime_us": min(trials),
             "trial_us": trials,
@@ -592,8 +614,8 @@ def final_benchmark(
         graphs.append((graph, sets))
     torch.cuda.current_stream().wait_stream(capture_stream)
     torch.cuda.synchronize()
-    count = max(1, math.ceil(25_000 / (z * estimate_us)))
-    for _ in range(100):
+    count = min(maximum, max(1, math.ceil(final_us / (z * estimate_us))))
+    for _ in range(flush_iterations):
         flush.zero_()
     events = []
     for index in range(count):
@@ -730,11 +752,19 @@ def benchmark_cycle(
                 row["status"] = "invalid"
             return verdict
 
+        settings = policy.get("benchmark", {})
         if not final_only:
             best = None
             for offset in range(0, len(entries), policy["group_size"]):
                 group = entries[offset : offset + policy["group_size"]]
-                values = ring_trials([c for _, c in group], [5] * len(group), ring, torch, flush)
+                values = ring_trials(
+                    [c for _, c in group],
+                    [settings.get("pilot_trials", 5)] * len(group),
+                    ring,
+                    torch,
+                    flush,
+                    settings.get("l2_flush_iterations", 100),
+                )
                 for (row, candidate), trials in zip(group, values, strict=True):
                     runtime = min(trials)
                     if not math.isfinite(runtime) or runtime <= 0:
@@ -749,16 +779,33 @@ def benchmark_cycle(
                     row["status"] = "pilot_pruned"
             for offset in range(0, len(survivors), policy["group_size"]):
                 group = survivors[offset : offset + policy["group_size"]]
-                counts = [math.ceil(10_000 / r["pilot_us"]) for r, _ in group]
-                active = [(r, c, n) for (r, c), n in zip(group, counts, strict=True) if n >= 10]
+                counts = [
+                    min(
+                        settings.get("max_refinement_trials", 100_000),
+                        math.ceil(
+                            settings.get("refinement_duration_ms", 10.0) * 1000 / r["pilot_us"]
+                        ),
+                    )
+                    for r, _ in group
+                ]
+                active = [
+                    (r, c, n)
+                    for (r, c), n in zip(group, counts, strict=True)
+                    if n >= settings.get("min_refinement_trials", 10)
+                ]
                 for (row, _), n in zip(group, counts, strict=True):
-                    if n < 10:
+                    if n < settings.get("min_refinement_trials", 10):
                         row.update(
                             refined_us=row["pilot_us"], refined_trial_us=row["pilot_trial_us"]
                         )
                 if active:
                     values = ring_trials(
-                        [c for _, c, _ in active], [n for _, _, n in active], ring, torch, flush
+                        [c for _, c, _ in active],
+                        [n for _, _, n in active],
+                        ring,
+                        torch,
+                        flush,
+                        settings.get("l2_flush_iterations", 100),
                     )
                     for (row, _, n), trials in zip(active, values, strict=True):
                         row.update(
@@ -790,7 +837,7 @@ def benchmark_cycle(
                 continue
             if not math.isfinite(estimate) or estimate <= 0:
                 raise RuntimeError("Invalid refined runtime")
-            final = final_benchmark(candidate, estimate, ring, torch, flush)
+            final = final_benchmark(candidate, estimate, ring, torch, flush, settings)
             if not math.isfinite(final["runtime_us"]) or final["runtime_us"] <= 0:
                 raise RuntimeError("Invalid final runtime")
             row.update(runtime_us=final["runtime_us"], final=final)

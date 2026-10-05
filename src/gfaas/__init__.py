@@ -47,6 +47,7 @@ __all__ = [
     "StageArtifactBinding",
     "TritonKernel",
     "TritonTuning",
+    "TritonBenchmark",
     "TritonPruning",
     "TritonInputMetadata",
     "TritonQuickBenchmarkError",
@@ -90,7 +91,7 @@ def __getattr__(name: str):
         from .triton_replication import TritonBenchmarkError
 
         return TritonBenchmarkError
-    if name in {"TritonTuning", "TritonPruning"}:
+    if name in {"TritonTuning", "TritonPruning", "TritonBenchmark"}:
         from . import triton_policy
 
         return getattr(triton_policy, name)
