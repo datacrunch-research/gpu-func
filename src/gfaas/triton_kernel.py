@@ -8,7 +8,9 @@ import inspect
 import json
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import replace
+from dataclasses import asdict, replace
+from threading import RLock
+from types import MappingProxyType
 from typing import Any
 
 from . import triton_compiler_runner, triton_quick_runner
@@ -18,10 +20,11 @@ from .errors import GfaasError
 from .triton_compat import (
     UnsupportedTritonKernelError,
     argument_type,
+    reset_arguments,
     source_bundle,
     validate_kernel,
 )
-from .triton_inputs import capture_inputs
+from .triton_inputs import apply_writes, snapshot_inputs
 from .triton_policy import TritonTuning, portable_callable
 from .triton_replication import benchmark_shards
 
@@ -64,13 +67,19 @@ class _IncompleteCompilerReportError(GfaasError):
         super().__init__(f"Compiler returned an incomplete variant report; Call {call_id}")
 
 
-class TritonKernel:
-    """Compile native configurations and optionally return replicated benchmark reports.
+def _freeze(value: Any) -> Any:
+    if isinstance(value, dict):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    return value
 
-    Calls capture ``with app.function(...)`` settings. With tuning, generated GPU
-    inputs replace tensor transport and calls return a report; ordinary execution
-    is deferred. Without tuning, compilation completes and raises the existing
-    execution-boundary error. Generators and in-place reset callbacks are required.
+
+class TritonKernel:
+    """Compile, tune, and execute using supplied tensors; cache results by specialization.
+
+    Launches return None and copy remote tensor writes into the original tensors.
+    Read immutable reports through tuning_results. Calls capture app.function settings.
     """
 
     compiler: Function
@@ -81,27 +90,38 @@ class TritonKernel:
         self,
         kernel: Any,
         *,
-        make_inputs: Any,
-        reset_inputs: Any,
         tuning: TritonTuning | None = None,
         variants_per_job: int | None = None,
         max_concurrent_jobs: int = 8,
         cache_compression_level: int = 1,
     ) -> None:
-        validate_kernel(kernel)
-        if not callable(make_inputs) or not callable(reset_inputs):
-            raise TypeError("make_inputs and reset_inputs must be callable")
-        self.make_inputs, self.reset_inputs = make_inputs, reset_inputs
+        _, configurations = validate_kernel(kernel)
         if variants_per_job is not None and variants_per_job < 1:
             raise ValueError("Invalid variants per compiler job")
         if not 1 <= max_concurrent_jobs <= 32:
             raise ValueError("Invalid concurrent compiler jobs")
         if not 0 <= cache_compression_level <= 9:
             raise ValueError("Invalid cache compression level")
-        self.kernel, self.tuning = kernel, tuning
+        self.kernel = kernel
+        self.tuning = (
+            tuning
+            if tuning is not None
+            else (
+                TritonTuning() if configurations is not None and len(configurations) > 1 else None
+            )
+        )
         self.variants_per_job = variants_per_job
         self.max_concurrent_jobs = max_concurrent_jobs
         self.cache_compression_level = cache_compression_level
+        self._cache: dict[tuple[int, str], Any] = {}
+        self._results: dict[str, Any] = {}
+        self._lock = RLock()
+
+    @property
+    def tuning_results(self) -> Any:
+        """Read-only reports indexed by an opaque specialization digest."""
+        with self._lock:
+            return MappingProxyType(dict(self._results))
 
     def _job_count(self, variant_count: int) -> int:
         if self.variants_per_job is not None:
@@ -162,7 +182,9 @@ class TritonKernel:
             if not 1000 <= (invocation.compiler.cpu_millicores or 0) <= 32000:
                 raise ValueError("Compiler CPU budget must be between 1000 and 32000 millicores")
             invocation.grid = grid
-            return invocation._compile(args, kwargs)
+            # Serialize duplicate specialization requests so they do not tune twice.
+            with self._lock:
+                return invocation._compile(args, kwargs)
 
         return launch
 
@@ -238,19 +260,43 @@ class TritonKernel:
         source = source_bundle(jit)
         import cloudpickle
 
-        metadata = capture_inputs(args, argument_kwargs) if self.tuning is not None else None
-        callbacks = (
-            cloudpickle.dumps(
-                (
-                    portable_callable(self.grid),
-                    portable_callable(self.tuning.evaluate),
-                    portable_callable(self.make_inputs),
-                    portable_callable(self.reset_inputs),
-                )
+        inputs = snapshot_inputs(args, argument_kwargs)
+        metadata = inputs["metadata"]
+        callbacks = cloudpickle.dumps(
+            (
+                portable_callable(self.grid),
+                portable_callable(self.tuning.evaluate if self.tuning else None),
             )
-            if self.tuning is not None
-            else None
         )
+        reset, restore = reset_arguments(self.kernel)
+        for name in set(reset + restore):
+            value = bound.arguments.get(name)
+            if value is not None and not hasattr(value, "untyped_storage"):
+                raise ValueError(
+                    "Reset/restore declarations must refer to tensor arguments or None"
+                )
+        specialization = {
+            "source": source,
+            "variants": variants,
+            "metadata": metadata,
+            "image": asdict(self.compiler._resolve_image()),
+            "gpu_type": self.gpu_function.gpu_type,
+            "env": self.gpu_function.env,
+            "triton_version": triton.__version__,
+            "reset": reset,
+            "restore": restore,
+            "callbacks": hashlib.sha256(callbacks).hexdigest(),
+            "tuning": self.tuning.request() if self.tuning else None,
+            "replication_factor": self.tuning.replication_factor if self.tuning else 1,
+        }
+        key = hashlib.sha256(
+            json.dumps(specialization, sort_keys=True, allow_nan=False).encode()
+        ).hexdigest()
+        # Artifacts belong to a particular client/account; never reuse across clients.
+        cache_key = (id(self.compiler.app.client), key)
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
+            return self._execute(cached, inputs, args, argument_kwargs)
         probe = self.gpu_function.spawn()
         target = probe.wait()
         if not isinstance(target, dict) or target.get("backend") != "cuda":
@@ -258,7 +304,7 @@ class TritonKernel:
         self.target_arch = target["arch"]
         try:
             report, call_id = self._dispatch(source, jit.fn.__name__, triton.__version__, variants)
-        except TritonCompilationError as error:
+        except (TritonCompilationError, TritonExecutionNotImplementedError) as error:
             error.report["target_probe_call_id"] = probe.call_id
             error.report["call_ids"] = [probe.call_id, *error.call_ids]
             error.call_ids = error.report["call_ids"]
@@ -267,12 +313,12 @@ class TritonKernel:
         report["call_ids"] = [probe.call_id, *compile_ids]
         report["target_probe_call_id"] = probe.call_id
         report["next_phase"] = "execution"
+        artifacts = []
+        for identity in compile_ids:
+            result = self.compiler.app.client.get_call_result(identity)
+            output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
+            artifacts.append(ArtifactRef(output["artifact_id"]))
         if self.tuning is not None:
-            artifacts = []
-            for identity in compile_ids:
-                result = self.compiler.app.client.get_call_result(identity)
-                output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
-                artifacts.append(ArtifactRef(output["artifact_id"]))
             benchmark = replace(self.gpu_function, handler=triton_quick_runner.benchmark_cycle)
             report["benchmark"] = benchmark_shards(
                 benchmark,
@@ -283,6 +329,10 @@ class TritonKernel:
                     "artifacts": artifacts,
                     "metadata": metadata,
                     "callbacks": callbacks,
+                    "inputs": inputs,
+                    "reset_arguments": reset,
+                    "restore_arguments": restore,
+                    "argument_names": jit.arg_names,
                     "target": target,
                     "triton_version": triton.__version__,
                     "policy": self.tuning.request(),
@@ -290,8 +340,40 @@ class TritonKernel:
                 self.tuning,
                 report["call_ids"],
             )
-            return report
-        raise TritonExecutionNotImplementedError(report, call_id)
+            winner = report["benchmark"]["best_configuration"]
+        elif len(variants) == 1:
+            winner = variants[0]
+        else:
+            raise ValueError("Multiple configurations require TritonTuning")
+        cached = {
+            "source": source,
+            "kernel_name": jit.fn.__name__,
+            "variant": winner,
+            "artifacts": artifacts,
+            "callbacks": callbacks,
+            "target": target,
+            "triton_version": triton.__version__,
+        }
+        report.pop("next_phase", None)
+        report["specialization"] = key
+        report["input_metadata"] = metadata
+        report["argument_names"] = jit.arg_names
+        report["target"] = target
+        self._cache[cache_key] = cached
+        self._results[key] = _freeze(report)
+        return self._execute(cached, inputs, args, argument_kwargs)
+
+    def _execute(
+        self,
+        cached: dict[str, Any],
+        inputs: dict[str, Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        executor = replace(self.gpu_function, handler=triton_quick_runner.execute_winner)
+        result = executor.spawn(**cached, inputs=inputs).wait()
+        apply_writes(result, args, kwargs)
+        return None
 
     def _dispatch(
         self,

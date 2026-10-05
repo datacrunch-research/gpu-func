@@ -136,6 +136,16 @@ def benchmark_shards(
                         if not final_only:
                             states[identity] = {**row, "replicas": [], "attempts": 0}
                         state = states[identity]
+                        if row.get("status") == "invalid" and state["replicas"]:
+                            failures.append(
+                                f"Configuration {identity} failed evaluation on one GPU after passing on another"
+                            )
+                            continue
+                        if row.get("status") == "measured" and state.get("status") == "invalid":
+                            failures.append(
+                                f"Configuration {identity} passed evaluation on one GPU after failing on another"
+                            )
+                            continue
                         if len(state["replicas"]) >= policy.replication_factor:
                             continue
                         if row["status"] != "measured":

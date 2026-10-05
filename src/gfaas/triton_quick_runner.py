@@ -580,7 +580,11 @@ def final_benchmark(
             math.floor(settings.get("graph_duration_ms", 1.0) * 1000 / estimate_us),
         ),
     )
-    if z < settings.get("min_calls_per_graph", 10):
+    padded_sets = math.ceil(len(ring.sets) / z) * z if ring is not None else z
+    graph_fits = padded_sets <= getattr(ring, "max_sets", math.inf) and padded_sets * (
+        getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0
+    ) <= getattr(ring, "max_bytes", math.inf)
+    if z < settings.get("min_calls_per_graph", 10) or not graph_fits:
         count = min(
             maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
         )
@@ -607,6 +611,11 @@ def final_benchmark(
     pool = torch.cuda.graph_pool_handle()
     for offset in range(0, len(ring.sets), z):
         sets = ring.sets[offset : offset + z]
+        # Warmup may mutate inputs. Restore before capture, outside event timing.
+        with torch.cuda.stream(capture_stream):
+            for args, kwargs in sets:
+                ring.reset(*args, **kwargs)
+        capture_stream.synchronize()
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph, stream=capture_stream, pool=pool):
             for args, kwargs in sets:
@@ -653,6 +662,10 @@ def benchmark_cycle(
     final_only: bool = False,
     excluded_gpu_uuids: list[str] | None = None,
     estimates: dict[str, float] | None = None,
+    inputs: dict[str, Any] | None = None,
+    reset_arguments: list[str] | None = None,
+    restore_arguments: list[str] | None = None,
+    argument_names: list[str] | None = None,
 ) -> dict[str, Any]:
     import cloudpickle
     import torch
@@ -670,7 +683,16 @@ def benchmark_cycle(
         raise RuntimeError("GPU UUID is required to verify independent replication")
     if gpu_uuid in (excluded_gpu_uuids or []):
         return {"status": "duplicate_gpu", "gpu_uuid": gpu_uuid, "results": []}
-    grid, evaluate, factory, reset = cloudpickle.loads(callbacks)
+    if inputs is None:
+        grid, evaluate, factory, reset = cloudpickle.loads(callbacks)
+    else:
+        from gfaas.triton_inputs import SnapshotInputs
+
+        grid, evaluate = cloudpickle.loads(callbacks)
+        factory = SnapshotInputs(
+            inputs, reset_arguments or [], restore_arguments or [], argument_names or []
+        )
+        reset = factory.reset
     variants_list = json.loads(variants)
     rows: list[dict[str, Any]] = []
     flush = l2_flush_buffer(torch)
@@ -868,3 +890,66 @@ def benchmark_replicas(*, device_count: int, **kwargs: Any) -> dict[str, Any]:
         with torch.cuda.device(device):
             reports.append(benchmark_cycle(**kwargs))
     return {"status": "replica_bundle", "replica_reports": reports}
+
+
+def execute_winner(
+    *,
+    source: str,
+    kernel_name: str,
+    variant: dict[str, Any],
+    artifacts: list[Any],
+    inputs: dict[str, Any],
+    callbacks: bytes,
+    target: dict[str, Any],
+    triton_version: str,
+) -> dict[str, Any]:
+    """Run once on the invocation snapshot and return its resulting storage bytes."""
+    import cloudpickle
+    import torch
+    import triton
+    from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource
+
+    from gfaas.triton_inputs import SnapshotInputs, snapshot_inputs
+
+    if probe_target() != target or triton.__version__ != triton_version:
+        raise RuntimeError("Execution GPU target or Triton version differs from compilation")
+    grid, _ = cloudpickle.loads(callbacks)
+    with tempfile.TemporaryDirectory(prefix="vfunc-execute-") as folder:
+        cache = Path(folder) / "cache"
+        cache.mkdir()
+        prepared = restore_caches(artifacts, cache, source, target, triton_version)
+        os.environ["TRITON_CACHE_DIR"] = str(cache)
+        if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
+            triton.knobs.cache.dir = str(cache)
+        path = Path(folder) / "compile_source.py"
+        path.write_text(source)
+        name = "vfunc_execute_" + hashlib.sha256(source.encode()).hexdigest()[:16]
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+        jit = getattr(module, kernel_name)
+        kinds, constants = variant["signature"], variant["constants"]
+        if "constexprs" in inspect.signature(ASTSource).parameters:
+            ast = ASTSource(jit, kinds, constexprs=constants)
+        else:
+            ast = ASTSource(
+                jit,
+                {jit.arg_names.index(n): k for n, k in kinds.items() if k != "constexpr"},
+                constants={jit.arg_names.index(n): v for n, v in constants.items()},
+            )
+        compiled = triton.compile(ast, target=GPUTarget(**target), options=variant["options"])
+        if compiled.hash != prepared[variant["id"]]["cache_hash"]:
+            raise RuntimeError("Execution did not load the CPU-prepared variant")
+        candidate = bound_candidate(
+            compiled, constants, variant["options"], inspect.signature(jit.fn), grid
+        )
+        factory = SnapshotInputs(inputs, [], [], jit.arg_names)
+        args, kwargs = factory(inputs["metadata"])
+        # Reset/restore declarations govern benchmarking only. The real launch
+        # observes the exact values supplied by the caller and preserves writes.
+        candidate(*args, **kwargs)
+        torch.cuda.synchronize()
+        return snapshot_inputs(args, kwargs)

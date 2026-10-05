@@ -172,7 +172,7 @@ mdbook build docs
 mdbook test docs
 ```
 
-## Triton compilation and quick benchmarking
+## Triton compilation, tuning, and execution
 
 ```python
 import gfaas as vfunc
@@ -180,16 +180,16 @@ import gfaas as vfunc
 app = vfunc.App("kernels", image=vfunc.Image("registered-triton-image"))
 kernel = vfunc.TritonKernel(
     native_kernel,
-    make_inputs=make_inputs,
-    reset_inputs=reset_inputs,
     tuning=vfunc.TritonTuning(
         refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
         evaluate=evaluate,
     ),
 )
 with app.function(gpu="gb300", cpu_millicores=16000, memory_bytes=4 * 1024**3):
-    report = kernel[grid](a, b, out, M=m, N=n, K=k)
-    print(report["benchmark"]["best_configuration"])
+    kernel[grid](a, b, out, M=m, N=n, K=k)
+# out now contains the remote kernel's writes.
+for specialization, result in kernel.tuning_results.items():
+    print(specialization, result["benchmark"]["best_configuration"])
 ```
 
 `app.function(...)` works as its existing decorator and as a context manager.
@@ -230,25 +230,46 @@ sizes. Structural failures stop queued jobs while active results are retained.
 
 ### Benchmark inputs, pruning and replication
 
-`TritonKernel` requires `make_inputs(metadata)` and `reset_inputs(*args, **kwargs)`.
-The generator returns `(args_tuple, kwargs_dict)` containing newly allocated CUDA
-tensors on the assigned GPU. Metadata contains `args` and `kwargs` entries with
-`kind="tensor"`, shape, stride, dtype name, storage offset and storage group, or
-`kind="value"` with the scalar value. Preserve those properties and aliases within
-one input set; separate sets must own independent storage. Reset modifies arguments
-in place; use a no-op for kernels that need no reset. Callbacks must be ordinary
-Python functions and use the provided inputs instead of capturing CUDA tensors.
+`TritonKernel` snapshots the actual invocation tensors into host storage bytes.
+Each GPU clones those storages into independent input-ring slots, preserving
+values, shapes, strides, offsets, dtypes, and aliases within each slot. CUDA
+storage is not serialized through cloudpickle. The client needs PyTorch for tensor
+transport; scalar arguments remain ordinary JSON values.
 
-With `tuning=TritonTuning(...)`, launch syntax returns a compilation and benchmark
-report. It does not execute the winning configuration on the caller's tensors.
-Without tuning, the compile-only execution boundary still raises
-`TritonExecutionNotImplementedError` with the compilation report.
+Use [Triton's documented declarations](https://triton-lang.org/main/python-api/generated/triton.autotune.html),
+`reset_to_zero=["output"]` and
+`restore_value=["state"]` declarations on `@triton.autotune` to describe mutable
+benchmark inputs. Reset runs before every timed reuse, outside the timed interval.
+Restore uses the canonical host snapshot rather than a separate GPU backup for
+every slot. Arbitrary hooks and custom autotuning modifiers remain unsupported.
+Every mutated input that needs an initial value on reuse must be declared.
+Graph warmup and capture are separated by another reset; graph slots are distinct,
+and resets happen before replay rather than inside its timed region.
+
+A launch compiles and tunes an uncached specialization, then executes its winner
+once on a separate clone of the original invocation. It copies resulting tensor
+storage back into the caller's existing tensors and returns `None`. Benchmark
+reset/restore policies do not change the real invocation's supplied values.
+A plain JIT kernel without tuning compiles and executes its single configuration.
+A native autotuner with multiple configurations uses default `TritonTuning`
+when no tuning policy is supplied.
+
+`kernel.tuning_results` contains immutable reports indexed by specialization digest;
+there is no `last_tuning`. Each report includes `input_metadata`, `argument_names`,
+and `target` so the specialization can be identified without decoding its digest.
+The key includes source, configurations, argument values
+and tensor metadata, launch grid, image configuration, GPU pool, environment,
+Triton version, reset declarations, evaluator, and tuning policy. Tensor contents
+are excluded, so a subsequent call with new values and the same specialization
+executes the cached winner without repeating compilation or tuning. Artifacts are
+reused only with the same client/account. Reports and compiled artifacts are
+cached in this wrapper's memory; registry image names should identify immutable
+versions. Result reports describe tuning, while each invocation executes again.
+Calls on one wrapper are serialized to prevent duplicate concurrent tuning.
 
 ```python
 kernel = vfunc.TritonKernel(
     native_kernel,
-    make_inputs=make_inputs,
-    reset_inputs=reset_inputs,
     tuning=vfunc.TritonTuning(
         pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
         refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
@@ -257,8 +278,9 @@ kernel = vfunc.TritonKernel(
     ),
 )
 with app.function(gpu="gb300"):
-    report = kernel[grid](*args, **kwargs)
-print(report["benchmark"]["best_configuration"])
+    kernel[grid](*args, **kwargs)
+for specialization, result in kernel.tuning_results.items():
+    print(specialization, result["benchmark"]["best_configuration"])
 ```
 
 Benchmark counts and estimated compute durations remain configurable separately
@@ -314,10 +336,12 @@ replaced by these independent policies.
 The GPU builds independent sets until their logical tensor footprint exceeds its
 reported L2 size. Shared storages are counted conservatively once. This is an
 allocation and scheduling contract, not a guarantee of cache eviction: kernels
-may access only a subset, and resets can warm cache lines. The user must generate
-inputs that exercise the intended working set. Ring allocation and graph padding
+may access only a subset, and resets can warm cache lines. The supplied
+inputs must exercise the intended working set. Ring allocation and graph padding
 are bounded by `max_input_sets` (65,536) and `max_ring_bytes` (8 GiB); exceeding
-limits fails clearly. Reports include the ring footprint and allocation size.
+the initial ring limits fails clearly. If graph padding would exceed a ring limit,
+final benchmarking uses direct events with per-call reset instead. Reports include
+the ring footprint and allocation size.
 
 Pilot groups (eight variants by default) enqueue 100 L2 zeroing operations, then
 interleave three single-launch event trials per variant, rotating inputs without

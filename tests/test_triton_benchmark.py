@@ -427,3 +427,37 @@ def test_invalid_benchmark_budgets(options):
 
     with pytest.raises(ValueError):
         TritonBenchmark(**options)
+
+
+def test_replica_accuracy_disagreement_raises_with_retained_results():
+    class Disagreement(FakeBenchmark):
+        def spawn(self, **kwargs):
+            result = super().spawn(**kwargs)
+            original = result.wait
+
+            def wait():
+                report = original()
+                if report["gpu_uuid"] == "gpu2":
+                    report["results"][0].update(status="invalid", evaluation="failed")
+                return report
+
+            result.wait = wait
+            return result
+
+    with pytest.raises(TritonBenchmarkError, match="failed evaluation.*passing") as error:
+        benchmark_shards(
+            Disagreement(["gpu1", "gpu2"]),
+            [{"id": "a"}],
+            {},
+            TritonTuning(replication_factor=2),
+            [],
+        )
+    assert len(error.value.report["results"][0]["replicas"]) == 1
+
+
+def test_graph_padding_falls_back_to_events_when_ring_memory_is_bounded(monkeypatch):
+    ring = SimpleNamespace(sets=[None], max_sets=1, allocated_bytes=1024, max_bytes=1024)
+    monkeypatch.setattr("gfaas.triton_quick_runner.ring_trials", lambda *a: [[5.0, 6.0]])
+    result = final_benchmark(None, 5, ring, None, None)
+    assert result["method"] == "events-ring"
+    assert result["calls_per_graph"] == 0

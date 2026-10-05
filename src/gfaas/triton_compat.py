@@ -25,6 +25,30 @@ def _types() -> tuple[Any, Any]:
     return JITFunction, Autotuner
 
 
+def reset_arguments(kernel: Any) -> tuple[list[str], list[str]]:
+    """Read documented names, with an index adapter for older Triton releases."""
+    result = []
+    for names_field, indices_field in (
+        ("reset_to_zero", "reset_idx"),
+        ("restore_value", "restore_idx"),
+    ):
+        names = getattr(kernel, names_field, None)
+        if names is None:
+            indices = getattr(kernel, indices_field, [])
+            try:
+                names = [kernel.arg_names[index] for index in indices]
+            except (IndexError, TypeError) as error:
+                raise UnsupportedTritonKernelError("Unrecognized reset/restore indices") from error
+        if not isinstance(names, (list, tuple)) or any(
+            type(name) is not str or name not in kernel.arg_names for name in names
+        ):
+            raise UnsupportedTritonKernelError(
+                "Reset/restore declarations must name kernel arguments"
+            )
+        result.append(list(names))
+    return result[0], result[1]
+
+
 def validate_kernel(kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
     """Accept exact JIT/vanilla autotuner classes; reject custom subclasses."""
     jit_type, auto_type = _types()
@@ -34,7 +58,8 @@ def validate_kernel(kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
             raise UnsupportedTritonKernelError("Only autotune directly wrapping jit is supported")
         # Instantiate the installed release's vanilla wrapper to compare defaults.
         # This runs Triton's constructor, never the user's callbacks or benchmark.
-        baseline = auto_type(kernel.fn, kernel.arg_names, kernel.configs, [], None, None)
+        reset, restore = reset_arguments(kernel)
+        baseline = auto_type(kernel.fn, kernel.arg_names, kernel.configs, [], reset, restore)
         checks = [
             "reset_to_zero",
             "restore_value",
@@ -62,7 +87,7 @@ def validate_kernel(kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
                 inspect.isfunction(current)
                 and inspect.isfunction(default)
                 and current.__code__ is default.__code__
-                and not current.__closure__
+                and all(cell.cell_contents is kernel for cell in (current.__closure__ or ()))
             ):
                 raise UnsupportedTritonKernelError(f"Autotuning callback is unsupported: {field}")
         # Fail closed when a newer release adds a modifier we do not know yet.

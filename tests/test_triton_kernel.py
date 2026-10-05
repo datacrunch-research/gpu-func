@@ -31,7 +31,11 @@ def reset_inputs(*args, **kwargs):
 
 
 def TritonKernel(*args, **kwargs):
-    return NativeTritonKernel(*args, make_inputs=make_inputs, reset_inputs=reset_inputs, **kwargs)
+    kernel = NativeTritonKernel(*args, **kwargs)
+    # Compiler-only tests isolate the dispatch phase, rather than run tuning.
+    if "tuning" not in kwargs:
+        kernel.tuning = None
+    return kernel
 
 
 def add(X, N, BLOCK):
@@ -61,8 +65,16 @@ class Config:
 class Autotuner:
     def __init__(self, fn, arg_names, configs, key, reset_to_zero, restore_value):
         self.fn, self.arg_names, self.configs = fn, arg_names, configs
+        self.reset_to_zero = list(reset_to_zero or [])
+        self.restore_value = list(restore_value or [])
         self.pre_hook = lambda kwargs: 0
         self.post_hook = lambda kwargs: 0
+        if self.reset_to_zero or self.restore_value:
+
+            def default_reset(kwargs):
+                return self.reset_to_zero
+
+            self.pre_hook = default_reset
         self.perf_model = None
         self.configs_top_k = 1.0
 
@@ -90,7 +102,7 @@ class Client:
 
 
 @pytest.fixture(autouse=True)
-def triton(monkeypatch):
+def triton(monkeypatch, request):
     modules = {
         name: ModuleType(name)
         for name in (
@@ -108,6 +120,23 @@ def triton(monkeypatch):
     modules["triton.language"].float32 = "fp32"
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
+    if request.node.name not in {
+        "test_benchmark_gpu_phase_receives_metadata_and_compiler_artifacts",
+        "test_generator_and_reset_are_removed",
+    } and not request.node.name.startswith("test_launch_"):
+        # These tests isolate compilation at its boundary, independently of
+        # tensor transport, benchmarking, and the new execution phase.
+        monkeypatch.setattr(
+            "gfaas.triton_kernel.snapshot_inputs",
+            lambda *a: {"metadata": {"args": [], "kwargs": {}}, "storages": {}},
+        )
+        original = NativeTritonKernel._dispatch
+
+        def compiler_boundary(self, *args):
+            report, identity = original(self, *args)
+            raise TritonExecutionNotImplementedError(report, identity)
+
+        monkeypatch.setattr(NativeTritonKernel, "_dispatch", compiler_boundary)
 
 
 def configuration(client=None, **options):
@@ -459,6 +488,10 @@ def test_benchmark_gpu_phase_receives_metadata_and_compiler_artifacts():
 
     class BenchmarkClient(Client):
         def submit(self, **kwargs):
+            if kwargs["function"].__name__ == "execute_winner":
+                return SimpleNamespace(
+                    call_id="call_execute", wait=lambda: kwargs["kwargs"]["inputs"]
+                )
             if kwargs["function"].__name__ == "benchmark_cycle":
                 self.benchmark_request = kwargs
                 variants = json.loads(kwargs["kwargs"]["variants"])
@@ -481,21 +514,103 @@ def test_benchmark_gpu_phase_receives_metadata_and_compiler_artifacts():
     kernel = TritonKernel(JIT(add), tuning=gfaas.TritonTuning(replication_factor=1))
     app = App("benchmark", image=Image("compiler"), client=client)
     with app.function(gpu="gb300", timeout=44, env={"A": "B"}):
-        report = kernel[(1,)](None, 1, 64)
+        assert kernel[(1,)](None, 1, 64) is None
+    report = next(iter(kernel.tuning_results.values()))
     request = client.benchmark_request
     assert request["gpu_count"] == 1 and request["gpu_type"] == "gb300"
     assert request["timeout_s"] == 44 and request["env"] == {"A": "B"}
     data = request["kwargs"]
     assert data["metadata"]["args"][0] == {"kind": "value", "value": None}
-    assert "inputs" not in data
+    assert data["inputs"]["storages"] == {}
     assert data["artifacts"][0].artifact_id == "art_compiled"
     assert cloudpickle.loads(data["callbacks"])[0] == (1,)
-    assert report["call_ids"] == ["call_probe", "call_test", "call_benchmark"]
+    assert report["call_ids"] == ("call_probe", "call_test", "call_benchmark")
     assert report["benchmark"]["best_runtime_us"] == 10
 
 
-def test_generator_and_reset_are_required():
+def test_generator_and_reset_are_removed():
+    NativeTritonKernel(JIT(add))
+    with pytest.raises(TypeError, match="make_inputs"):
+        NativeTritonKernel(JIT(add), make_inputs=make_inputs)
+    with pytest.raises(TypeError, match="reset_inputs"):
+        NativeTritonKernel(JIT(add), reset_inputs=reset_inputs)
+
+
+def test_launch_cached_specializations_execute_every_call_and_reports_are_immutable():
+    import gfaas
+
+    class LaunchClient(Client):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        def submit(self, **request):
+            name = request["function"].__name__
+            self.calls.append(name)
+            if name == "execute_winner":
+                return SimpleNamespace(call_id="execute", wait=lambda: request["kwargs"]["inputs"])
+            if name == "benchmark_cycle":
+                rows = [
+                    {"id": v["id"], "status": "measured", "runtime_us": 10, "refined_us": 11}
+                    for v in json.loads(request["kwargs"]["variants"])
+                ]
+                return SimpleNamespace(
+                    call_id="bench",
+                    wait=lambda: {"status": "passed", "gpu_uuid": "gpu0", "results": rows},
+                )
+            return super().submit(**request)
+
+        def get_call_result(self, identity):
+            return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_compiled"}]}
+
+    client = LaunchClient()
+    kernel = NativeTritonKernel(JIT(add), tuning=gfaas.TritonTuning(replication_factor=1))
+    app = App("launch", image=Image("compiler"), client=client)
+    with app.function(gpu="gb300"):
+        assert kernel[(1,)](None, 1, 64) is None
+        assert kernel[(1,)](None, 1, 64) is None
+    assert client.calls.count("probe_target") == 1
+    assert client.calls.count("compile_batch") == 1
+    assert client.calls.count("benchmark_cycle") == 1
+    assert client.calls.count("execute_winner") == 2
+    assert len(kernel.tuning_results) == 1
+    key, report = next(iter(kernel.tuning_results.items()))
+    assert report["specialization"] == key
     with pytest.raises(TypeError):
-        NativeTritonKernel(JIT(add))
-    with pytest.raises(TypeError, match="callable"):
-        NativeTritonKernel(JIT(add), make_inputs=None, reset_inputs=reset_inputs)
+        kernel.tuning_results[key] = {}
+    with pytest.raises(TypeError):
+        report["benchmark"]["best_runtime_us"] = 0
+    assert not hasattr(kernel, "last_tuning")
+    with app.function(gpu="gb300"):
+        kernel[(1,)](None, 2, 64)
+    assert len(kernel.tuning_results) == 2
+    with app.function(gpu="gb300", image=Image("other")):
+        kernel[(1,)](None, 2, 64)
+    assert len(kernel.tuning_results) == 3
+
+
+def test_launch_single_configuration_executes_without_benchmarking():
+    class LaunchClient(Client):
+        def submit(self, **request):
+            if request["function"].__name__ == "execute_winner":
+                return SimpleNamespace(call_id="execute", wait=lambda: request["kwargs"]["inputs"])
+            return super().submit(**request)
+
+        def get_call_result(self, identity):
+            return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_compiled"}]}
+
+    kernel = NativeTritonKernel(JIT(add))
+    with App("single", image=Image("compiler"), client=LaunchClient()).function(gpu="gb300"):
+        assert kernel[(1,)](None, 1, 64) is None
+    assert "benchmark" not in next(iter(kernel.tuning_results.values()))
+
+
+def test_launch_accepts_declarative_reset_but_rejects_custom_hooks():
+    native = Autotuner(JIT(add), ["X", "N", "BLOCK"], [Config({"BLOCK": 64})], ["N"], ["X"], None)
+    from gfaas.triton_compat import reset_arguments
+
+    assert reset_arguments(native) == (["X"], [])
+    NativeTritonKernel(native)
+    native.pre_hook = lambda *a: None
+    with pytest.raises(UnsupportedTritonKernelError, match="callback"):
+        NativeTritonKernel(native)
