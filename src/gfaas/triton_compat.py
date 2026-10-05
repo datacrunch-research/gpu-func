@@ -244,7 +244,7 @@ def source_bundle(kernel: Any, frontend: str = "triton") -> str:
         local_names.update(
             n.id for n in ast.walk(node) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
         )
-        for referenced in references - local_names:
+        for referenced in sorted(references - local_names):
             if referenced not in function.__globals__ or referenced == name:
                 continue
             value = function.__globals__[referenced]
