@@ -81,13 +81,15 @@ class KernelCall:
 
 
 def benchmark(
-    call: KernelCall, *args: Any, options: KernelBenchmark | None = None, **kwargs: Any
+    call: KernelCall | Kernel, *args: Any, options: KernelBenchmark | None = None, **kwargs: Any
 ) -> Any:
     """Autotune if necessary, then freshly measure the winner on distinct GPUs.
 
     Use benchmark(kernel[grid], *args, options=KernelBenchmark(...), **kwargs)
     inside app.function. Benchmarking leaves the caller's tensors unchanged.
     """
+    if isinstance(call, Kernel) and callable(call):
+        call = KernelCall(call, None)
     if not isinstance(call, KernelCall) or not isinstance(call.kernel, Kernel):
         raise TypeError("benchmark requires a vFunc Kernel launch, such as kernel[grid]")
     if options is not None and not isinstance(options, KernelBenchmark):
