@@ -49,6 +49,12 @@ __all__ = [
     "Image",
     "RemoteResult",
     "StageArtifactBinding",
+    "CuteDSLKernel",
+    "CuteDSLCompilationError",
+    "UnsupportedCuteDSLKernelError",
+    "KernelTuning",
+    "KernelPruning",
+    "KernelTiming",
     "TritonKernel",
     "TritonTuning",
     "TritonBenchmark",
@@ -69,6 +75,22 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name in {"CuteDSLKernel", "CuteDSLCompilationError", "UnsupportedCuteDSLKernelError"}:
+        from . import cute_kernel
+
+        return getattr(cute_kernel, name)
+    if name in {"KernelTuning", "KernelPruning", "KernelTiming"}:
+        from . import triton_policy
+
+        return getattr(
+            triton_policy,
+            {
+                "KernelTuning": "TritonTuning",
+                "KernelPruning": "TritonPruning",
+                "KernelTiming": "TritonBenchmark",
+            }[name],
+        )
+
     if name in {"Client", "RemoteResult"}:
         from .client import Client, RemoteResult
 
