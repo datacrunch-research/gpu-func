@@ -223,7 +223,9 @@ def source_bundle(kernel: Any) -> str:
                         f"Unsupported source dependency: {referenced}"
                     )
                 imports[referenced] = f"import {value.__name__} as {referenced}"
-            elif getattr(value, "__module__", "").startswith("triton.language.extra.tlx"):
+            elif getattr(value, "__module__", "") == "triton.language.extra.tlx" or getattr(
+                value, "__module__", ""
+            ).startswith("triton.language.extra.tlx."):
                 module = importlib.import_module(value.__module__)
                 symbol = getattr(value, "__name__", "")
                 if not symbol.isidentifier() or getattr(module, symbol, None) is not value:

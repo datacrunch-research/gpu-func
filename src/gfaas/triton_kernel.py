@@ -205,9 +205,8 @@ class TritonKernel(Kernel):
     ) -> Any:
         import triton  # type: ignore[import-not-found]
 
-        jit, configs = self._validate_kernel(
-            self.kernel
-        )  # Revalidate mutable wrappers at invocation.
+        # Revalidate mutable wrappers at invocation.
+        jit, configs = self._validate_kernel(self.kernel)
         if not hasattr(jit, "params") or not callable(getattr(jit, "fn", None)):
             raise UnsupportedTritonKernelError("Unrecognized JIT signature interface")
         parameters = {p.name: p for p in jit.params}
