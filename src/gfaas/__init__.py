@@ -25,8 +25,16 @@ from .image import Image
 from .kernel import Kernel, KernelBenchmark, benchmark
 from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
+from .thunderkittens_kernel import (
+    ThunderKittensCompilationError,
+    ThunderKittensConfig,
+    ThunderKittensKernel,
+)
 
 __all__ = [
+    "ThunderKittensKernel",
+    "ThunderKittensConfig",
+    "ThunderKittensCompilationError",
     "App",
     "Kernel",
     "KernelBenchmark",
