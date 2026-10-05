@@ -202,3 +202,19 @@ def test_source_constants_are_valid_before_remote_preparation(native):
     native.fn = non_literal_options
     with pytest.raises(gfaas.UnsupportedHelionKernelError, match="cannot be transported"):
         source_bundle(native)
+
+
+OUTPUT_DTYPE = torch.float64
+
+
+def typed_output(x):
+    return x.to(OUTPUT_DTYPE)
+
+
+def test_global_torch_dtype_is_preserved_without_importing_the_callers_module(native):
+    from gfaas.helion_compat import source_bundle
+
+    native.fn = typed_output
+    namespace = {}
+    exec(source_bundle(native), namespace)
+    assert namespace["typed_output"](torch.ones(2)).dtype == OUTPUT_DTYPE

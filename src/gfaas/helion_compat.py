@@ -65,6 +65,9 @@ def source_bundle(kernel: Any) -> str:
     )
     imports = []
     constants = []
+    dtype_module = "__vfunc_torch_dtype"
+    while dtype_module in references:
+        dtype_module += "_"
     for name in sorted(references - local):
         if name not in function.__globals__ or name == function.__name__:
             continue
@@ -76,6 +79,12 @@ def source_bundle(kernel: Any) -> str:
             "typing",
         ):
             imports.append(f"import {value.__name__} as {name}")
+        elif type(value).__module__ == "torch" and type(value).__name__ == "dtype":
+            dtype_name = str(value).removeprefix("torch.")
+            if not dtype_name.isidentifier():
+                raise UnsupportedHelionKernelError(f"Unsupported dtype constant: {name}")
+            imports.append(f"import torch as {dtype_module}")
+            constants.append(f"{name} = {dtype_module}.{dtype_name}")
         elif value is None or type(value) in (bool, int, float, str, tuple):
             try:
                 ast.literal_eval(repr(value))
