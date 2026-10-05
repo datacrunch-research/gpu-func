@@ -7,6 +7,8 @@ import inspect
 import json
 from typing import Any
 
+from .helion_compat import installed_version
+
 
 def prepare(
     *,
@@ -26,7 +28,7 @@ def prepare(
     from gfaas.triton_inputs import SnapshotInputs
     from gfaas.triton_quick_runner import probe_target
 
-    if helion.__version__ != helion_version:
+    if installed_version() != helion_version:
         raise RuntimeError("Preparation Helion version differs from the client")
     module = PyCodeCache.load(source)
     native = helion.kernel(

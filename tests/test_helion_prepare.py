@@ -60,6 +60,7 @@ def test_preparation_captures_multiple_launches_without_executing_device_code(mo
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setattr(triton_inputs, "SnapshotInputs", lambda *a: lambda metadata: ((1,), {}))
     monkeypatch.setattr(triton_quick_runner, "probe_target", lambda: {"arch": 103})
+    monkeypatch.setattr(helion_prepare, "installed_version", lambda: "1.4.0")
     result = helion_prepare.prepare(
         source="example",
         kernel_name="example",

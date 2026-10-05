@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import importlib.metadata
 import inspect
 import json
 import textwrap
@@ -12,6 +13,10 @@ from typing import Any
 
 class UnsupportedHelionKernelError(ValueError):
     pass
+
+
+def installed_version() -> str:
+    return importlib.metadata.version("helion")
 
 
 def validate_kernel(kernel: Any) -> None:

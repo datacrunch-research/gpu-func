@@ -15,7 +15,7 @@ from . import helion_compiler_runner, helion_prepare, helion_runner
 from .app import active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
-from .helion_compat import configuration_dicts, source_bundle, validate_kernel
+from .helion_compat import configuration_dicts, installed_version, source_bundle, validate_kernel
 from .kernel import Kernel, KernelBenchmark
 from .kernel_results import apply_result
 from .triton_inputs import snapshot_inputs
@@ -90,7 +90,6 @@ class HelionKernel(Kernel):
         if grid is not None:
             raise ValueError("Helion kernels determine their own launch grids")
         import cloudpickle
-        import helion  # type: ignore[import-not-found]
 
         validate_kernel(self.kernel)
         binding = inspect.signature(self.kernel.fn).bind(*args, **kwargs)
@@ -131,7 +130,7 @@ class HelionKernel(Kernel):
                     "metadata": inputs["metadata"],
                     "configs": self.configurations,
                     "image": asdict(image),
-                    "helion_version": helion.__version__,
+                    "helion_version": installed_version(),
                     "settings": hashlib.sha256(settings).hexdigest(),
                 },
                 sort_keys=True,
@@ -144,7 +143,7 @@ class HelionKernel(Kernel):
             reused = cache_key in self._cache
             if not reused:
                 report = self._prepare_compile_tune(
-                    gpu, compiler, source, settings, inputs, callbacks, names, helion.__version__
+                    gpu, compiler, source, settings, inputs, callbacks, names, installed_version()
                 )
                 report["specialization"] = key
                 report["input_metadata"] = inputs["metadata"]
@@ -161,7 +160,7 @@ class HelionKernel(Kernel):
             common = {
                 "target": cached["target"],
                 "triton_version": cached["triton_version"],
-                "helion_version": helion.__version__,
+                "helion_version": installed_version(),
                 "inputs": inputs,
                 "artifacts": artifacts,
             }

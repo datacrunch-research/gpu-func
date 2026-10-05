@@ -9,6 +9,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from .helion_compat import installed_version
+
 
 def restore_variants(
     variants: list[dict[str, Any]],
@@ -152,7 +154,6 @@ def benchmark_cycle(
     prepared: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     import cloudpickle
-    import helion  # type: ignore[import-not-found]
     import torch  # type: ignore[import-not-found]
     import triton
 
@@ -163,7 +164,7 @@ def benchmark_cycle(
     if (
         probe_target(torch.cuda.current_device()) != target
         or triton.__version__ != triton_version
-        or helion.__version__ != helion_version
+        or installed_version() != helion_version
     ):
         raise RuntimeError("Helion benchmark environment differs from compilation")
     gpu_uuid = str(
@@ -263,7 +264,6 @@ def execute_winner(
     helion_version: str,
     inputs: dict[str, Any],
 ) -> dict[str, Any]:
-    import helion
     import torch
     import triton
 
@@ -273,7 +273,7 @@ def execute_winner(
 
     if (
         probe_target() != target
-        or helion.__version__ != helion_version
+        or installed_version() != helion_version
         or triton.__version__ != triton_version
     ):
         raise RuntimeError("Helion execution environment differs from compilation")

@@ -39,6 +39,7 @@ def native(monkeypatch):
     module = ModuleType("helion")
     module.Kernel, module.__version__ = Native, "1.4.0"
     monkeypatch.setitem(sys.modules, "helion", module)
+    monkeypatch.setattr("gfaas.helion_kernel.installed_version", lambda: "1.4.0")
     return Native(add)
 
 
