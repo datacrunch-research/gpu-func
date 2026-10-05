@@ -130,6 +130,7 @@ class HelionKernel(Kernel):
                     "metadata": inputs["metadata"],
                     "configs": self.configurations,
                     "image": asdict(image),
+                    "gpu_pool": pool,
                     "helion_version": installed_version(),
                     "settings": hashlib.sha256(settings).hexdigest(),
                 },

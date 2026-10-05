@@ -218,3 +218,16 @@ def test_global_torch_dtype_is_preserved_without_importing_the_callers_module(na
     namespace = {}
     exec(source_bundle(native), namespace)
     assert namespace["typed_output"](torch.ones(2)).dtype == OUTPUT_DTYPE
+
+
+def test_changing_the_gpu_target_creates_a_new_specialization(native):
+    client = Client()
+    kernel = gfaas.HelionKernel(native)
+    app = gfaas.App("helion", image=gfaas.Image("compiler"), client=client)
+    x, y = torch.ones(8), torch.ones(8)
+    with app.function(gpu="gb300"):
+        assert torch.equal(kernel(x, y), x + y)
+    with app.function(gpu="h100"):
+        assert torch.equal(kernel(x, y), x + y)
+    assert client.phases.count("prepare") == 2
+    assert len(kernel.tuning_results) == 2
