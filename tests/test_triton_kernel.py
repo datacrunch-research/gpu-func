@@ -697,3 +697,61 @@ def test_launch_benchmark_options_type_check_happens_before_remote_work():
     kernel = NativeTritonKernel(JIT(add))
     with pytest.raises(TypeError, match="options"):
         gfaas.benchmark(kernel[(1,)], None, 1, 64, options={})
+
+
+def test_launch_cached_benchmark_requests_only_winners_compiler_shard():
+    import gfaas
+
+    class ShardedClient(Client):
+        def submit(self, **request):
+            name = request["function"].__name__
+            data = request["kwargs"]
+            if name == "compile_batch":
+                (variant,) = json.loads(data["variants"])
+                block = variant["constants"]["BLOCK"]
+                return SimpleNamespace(
+                    call_id=f"compile_{block}",
+                    wait=lambda: {"results": [{"id": variant["id"], "status": "compiled"}]},
+                )
+            if name in ("benchmark_cycle", "benchmark_selected_replicas"):
+                variants = json.loads(data["variants"])
+                report = {
+                    "status": "passed",
+                    "gpu_uuid": "gpu0",
+                    "results": [
+                        {
+                            "id": v["id"],
+                            "status": "measured",
+                            "runtime_us": v["constants"]["BLOCK"],
+                            "refined_us": v["constants"]["BLOCK"],
+                            "evaluation": "passed",
+                        }
+                        for v in variants
+                    ],
+                }
+                if name == "benchmark_selected_replicas":
+                    assert [a.artifact_id for a in data["artifacts"]] == ["art_compile_32"]
+                    report = {"replica_reports": [report]}
+                return SimpleNamespace(call_id=name, wait=lambda: report)
+            return super().submit(**request)
+
+        def get_call_result(self, identity):
+            return {"artifacts": [{"name": "compiled-triton", "artifact_id": "art_" + identity}]}
+
+    client = ShardedClient()
+    native = Autotuner(
+        JIT(add), ["X", "N", "BLOCK"], [Config({"BLOCK": 32}), Config({"BLOCK": 64})], ["N"], [], []
+    )
+    kernel = NativeTritonKernel(
+        native,
+        variants_per_job=1,
+        max_concurrent_jobs=1,
+        tuning=gfaas.TritonTuning(replication_factor=1),
+    )
+    app = App("bench", image=Image("compiler"), client=client)
+    with app.function(gpu="gb300"):
+        result = gfaas.benchmark(
+            kernel[(1,)], None, 64, options=gfaas.KernelBenchmark(replication_factor=1)
+        )
+    assert result["configuration"]["constants"]["BLOCK"] == 32
+    assert len(result["benchmark_call_ids"]) == 1
