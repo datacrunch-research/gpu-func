@@ -465,8 +465,27 @@ with app.function(gpu="gb300", timeout=600, capacity_wait=300):
 print(warm["runtime_us"], warm["configuration"]["constants"])
 ```
 
-Install the **same `nvidia-cutlass-dsl` version** in the client and the selected
-vFunc image. Images also need PyTorch, CUDA bindings and CuTe's runtime libraries.
+Services that receive kernel source can construct a wrapper without importing
+that source in the client process:
+
+```python
+kernel = vfunc.CuteDSLKernel.from_source(
+    source,
+    entrypoint="kernel_entry",
+    cute_version="4.8.0",
+    configurations=[{"BLOCK": 64}, {"BLOCK": 128}],
+    tuning=vfunc.KernelTuning(evaluate=evaluate_add, replication_factor=3),
+)
+```
+
+`from_source` parses the host signature without executing the module. Host
+parameters must have explicit names and literal defaults. The module executes
+only in remote compilation/execution jobs. `cute_version` declares the expected
+version in the selected application image; the GPU probe verifies it before
+compilation. This entry point does not require CuTe installed in the client.
+
+For the callable entry point, install the **same `nvidia-cutlass-dsl` version** in
+the client and the selected vFunc image. Images also need PyTorch, CUDA bindings and CuTe's runtime libraries.
 No package installation occurs implicitly in the SDK. App/Function image,
 resource, target, timeout and environment settings apply normally.
 

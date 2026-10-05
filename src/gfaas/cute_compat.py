@@ -6,11 +6,69 @@ import ast
 import inspect
 import textwrap
 import types
+from dataclasses import dataclass
 from typing import Any
 
 
 class UnsupportedCuteDSLKernelError(ValueError):
     pass
+
+
+@dataclass(frozen=True)
+class SourceEntry:
+    source: str
+    entrypoint: str
+    signature: inspect.Signature
+    cute_version: str
+
+
+def source_entry(source: str, entrypoint: str, cute_version: str) -> SourceEntry:
+    """Inspect a remote module's host signature without importing or evaluating it."""
+    if not isinstance(source, str) or not source or len(source.encode()) > 1024 * 1024:
+        raise ValueError("Source must be a nonempty Python module within 1 MiB")
+    if not isinstance(entrypoint, str) or not entrypoint.isidentifier():
+        raise ValueError("Invalid CuTe entrypoint")
+    if not isinstance(cute_version, str) or not cute_version or len(cute_version) > 64:
+        raise ValueError("Specify the CuTe version required in the selected image")
+    nodes = [
+        n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == entrypoint
+    ]
+    if len(nodes) != 1 or not any(
+        isinstance(d, ast.Attribute) and d.attr == "jit" for d in nodes[0].decorator_list
+    ):
+        raise UnsupportedCuteDSLKernelError("Source must define one @cute.jit host entrypoint")
+    args = nodes[0].args
+    if args.vararg or args.kwarg:
+        raise UnsupportedCuteDSLKernelError(
+            "Source host entries must use explicit named parameters"
+        )
+    positional = [*args.posonlyargs, *args.args]
+    defaults = [None] * (len(positional) - len(args.defaults)) + list(args.defaults)
+    parameters = []
+    for index, (arg, default) in enumerate(
+        [
+            *zip(positional, defaults, strict=True),
+            *zip(args.kwonlyargs, args.kw_defaults, strict=True),
+        ]
+    ):
+        try:
+            value = inspect.Parameter.empty if default is None else ast.literal_eval(default)
+        except (ValueError, TypeError):
+            raise UnsupportedCuteDSLKernelError(
+                "Source parameter defaults must be literals"
+            ) from None
+        kind = (
+            inspect.Parameter.POSITIONAL_ONLY
+            if index < len(args.posonlyargs)
+            else inspect.Parameter.POSITIONAL_OR_KEYWORD
+            if index < len(positional)
+            else inspect.Parameter.KEYWORD_ONLY
+        )
+        annotation = (
+            inspect.Parameter.empty if arg.annotation is None else ast.unparse(arg.annotation)
+        )
+        parameters.append(inspect.Parameter(arg.arg, kind, default=value, annotation=annotation))
+    return SourceEntry(source, entrypoint, inspect.Signature(parameters), cute_version)
 
 
 def kernel_function(kernel: Any) -> Any:

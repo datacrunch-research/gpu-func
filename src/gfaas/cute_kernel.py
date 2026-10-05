@@ -16,11 +16,13 @@ from . import cute_compiler_runner, cute_runner
 from .app import Function, active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .cute_compat import (
+    SourceEntry,
     UnsupportedCuteDSLKernelError,
     decode_constants,
     encode_constant,
     kernel_function,
     source_bundle,
+    source_entry,
 )
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
@@ -60,8 +62,13 @@ class CuteDSLKernel(Kernel):
         reset_to_zero: tuple[str, ...] = (),
         restore_value: tuple[str, ...] = (),
     ):
-        self.function = kernel_function(kernel)
-        self.signature = inspect.signature(self.function)
+        if isinstance(kernel, SourceEntry):
+            self.function = None
+            self.signature = kernel.signature
+        else:
+            function = kernel_function(kernel)
+            self.function = function
+            self.signature = inspect.signature(function)
         self.kernel = kernel
         configs = configurations if configurations is not None else [{}]
         if not configs or any(not isinstance(c, dict) for c in configs):
@@ -106,6 +113,18 @@ class CuteDSLKernel(Kernel):
         self._lock = RLock()
         self._cache: dict[tuple[int, str], Any] = {}
         self._results: dict[str, Any] = {}
+
+    @classmethod
+    def from_source(
+        cls, source: str, *, entrypoint: str, cute_version: str, **options: Any
+    ) -> CuteDSLKernel:
+        """Wrap a source module without executing it on the caller.
+
+        cute_version declares the required package version in the app's selected
+        image; vFunc checks that image before compiling. Source is executed only
+        in isolated compiler and GPU jobs. All normal tuning options apply.
+        """
+        return cls(source_entry(source, entrypoint, cute_version), **options)
 
     def __call__(self, *args: Any, **kwargs: Any) -> None:
         return self._invoke(None, args, kwargs, None)
@@ -216,7 +235,11 @@ class CuteDSLKernel(Kernel):
                 raise ValueError("Reset/restore declarations must name tensor inputs")
         inputs = snapshot_inputs(args, kwargs)
         self.metadata, self.argument_names = inputs["metadata"], names
-        source, kernel_name = source_bundle(self.kernel)
+        source, kernel_name = (
+            (self.kernel.source, self.kernel.entrypoint)
+            if isinstance(self.kernel, SourceEntry)
+            else source_bundle(self.kernel)
+        )
         variants = []
         seen = set()
         for config in self.configurations:
@@ -255,7 +278,9 @@ class CuteDSLKernel(Kernel):
         callbacks = cloudpickle.dumps(
             (None, portable_callable(self.tuning.evaluate if self.tuning else None))
         )
-        library_version = version()
+        library_version = (
+            self.kernel.cute_version if isinstance(self.kernel, SourceEntry) else version()
+        )
         specification = {
             "source": source,
             "variants": variants,

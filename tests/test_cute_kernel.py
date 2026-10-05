@@ -128,6 +128,36 @@ def test_source_bundles_device_dependencies_and_callable_state():
     assert "class CallableKernel" in source and f"{name}.block = 128" in source
 
 
+def test_source_entry_is_never_executed_on_the_controller():
+    source = """raise RuntimeError("must only execute in a remote worker")
+@cute.jit
+def entry(a: cute.Tensor, BLOCK: cutlass.Constexpr, *, stream: cuda.CUstream):
+    pass
+"""
+    client = FakeClient()
+    app = App("cute-source", image=Image("test"), client=client)
+    kernel = CuteDSLKernel.from_source(
+        source,
+        entrypoint="entry",
+        cute_version="4.8.0",
+        configurations=[{"BLOCK": 64}, {"BLOCK": 128}],
+        tuning=gfaas.KernelTuning(replication_factor=3),
+    )
+    with app.function(gpu="gb300"):
+        measured = gfaas.benchmark(kernel, 1)
+        kernel(1)
+    assert measured["autotuned"]
+    request = next(r for r in client.requests if r["function"].__name__ == "compile_batch")
+    assert request["kwargs"]["source"] == source
+    assert request["kwargs"]["kernel_name"] == "entry"
+
+
+def test_source_signature_defaults_are_not_evaluated():
+    source = "@cute.jit\ndef entry(a=side_effect()):\n    pass\n"
+    with pytest.raises(ValueError, match="defaults must be literals"):
+        CuteDSLKernel.from_source(source, entrypoint="entry", cute_version="4.8.0")
+
+
 @pytest.mark.parametrize(
     "options",
     [
@@ -257,6 +287,7 @@ def test_exported_runtime_status_is_not_a_python_host_return(monkeypatch, tmp_pa
         ("cuda.bindings.driver", driver),
     ):
         monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.setitem(sys.modules, "torch", types.ModuleType("torch"))
     launch = candidate(tmp_path / "kernel.o", {"signature": {"a": "scalar"}}, ["a"])
     assert launch(3) is None
     assert calls == [(3,)]
