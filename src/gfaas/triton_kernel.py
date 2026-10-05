@@ -83,6 +83,8 @@ class TritonKernel(Kernel):
     Read immutable reports through tuning_results. Calls capture app.function settings.
     """
 
+    frontend = "triton"
+
     compiler: Function
     gpu_function: Function
     grid: Any
@@ -96,7 +98,7 @@ class TritonKernel(Kernel):
         max_concurrent_jobs: int = 8,
         cache_compression_level: int = 1,
     ) -> None:
-        _, configurations = validate_kernel(kernel)
+        _, configurations = validate_kernel(kernel, self.frontend)
         if variants_per_job is not None and variants_per_job < 1:
             raise ValueError("Invalid variants per compiler job")
         if not 1 <= max_concurrent_jobs <= 32:
@@ -199,7 +201,9 @@ class TritonKernel(Kernel):
     ) -> Any:
         import triton  # type: ignore[import-not-found]
 
-        jit, configs = validate_kernel(self.kernel)  # Revalidate mutable wrappers at invocation.
+        jit, configs = validate_kernel(
+            self.kernel, self.frontend
+        )  # Revalidate mutable wrappers at invocation.
         if not hasattr(jit, "params") or not callable(getattr(jit, "fn", None)):
             raise UnsupportedTritonKernelError("Unrecognized JIT signature interface")
         parameters = {p.name: p for p in jit.params}
@@ -265,7 +269,7 @@ class TritonKernel(Kernel):
             if variant["id"] not in variant_ids:
                 variants.append(variant)
                 variant_ids.add(variant["id"])
-        source = source_bundle(jit)
+        source = source_bundle(jit, self.frontend)
         import cloudpickle
 
         inputs = snapshot_inputs(args, argument_kwargs)
@@ -324,10 +328,16 @@ class TritonKernel(Kernel):
         report["target_probe_call_id"] = probe.call_id
         report["next_phase"] = "execution"
         artifacts = []
+        artifact_variants = {}
         for identity in compile_ids:
             result = self.compiler.app.client.get_call_result(identity)
             output = next(a for a in result["artifacts"] if a.get("name") == "compiled-triton")
-            artifacts.append(ArtifactRef(output["artifact_id"]))
+            artifact = ArtifactRef(output["artifact_id"])
+            artifacts.append(artifact)
+            shard = next((s for s in report.get("shards", []) if s["call_id"] == identity), None)
+            if shard:
+                for row in shard["report"]["results"]:
+                    artifact_variants[row["id"]] = artifact
         if self.tuning is not None:
             benchmark = replace(self.gpu_function, handler=triton_quick_runner.benchmark_cycle)
             report["benchmark"] = benchmark_shards(
@@ -359,7 +369,9 @@ class TritonKernel(Kernel):
             "source": source,
             "kernel_name": jit.fn.__name__,
             "variant": winner,
-            "artifacts": artifacts,
+            "artifacts": [artifact_variants[winner["id"]]]
+            if winner["id"] in artifact_variants
+            else artifacts,
             "callbacks": callbacks,
             "target": target,
             "triton_version": triton.__version__,
@@ -383,7 +395,7 @@ class TritonKernel(Kernel):
 
         grid, evaluate = cloudpickle.loads(cached["callbacks"])
         reset, restore = reset_arguments(self.kernel)
-        jit, _ = validate_kernel(self.kernel)
+        jit, _ = validate_kernel(self.kernel, self.frontend)
         policy = options.tuning_policy()
         function = replace(self.gpu_function, handler=triton_quick_runner.benchmark_selected)
         calls: list[str] = []
@@ -406,6 +418,7 @@ class TritonKernel(Kernel):
             },
             policy,
             calls,
+            single_job=True,
         )
         winner = next(row for row in report["results"] if row["id"] == report["best_id"])
         report.update(
@@ -586,3 +599,15 @@ class TritonKernel(Kernel):
         ):
             raise _IncompleteCompilerReportError(result.call_id)
         return result.call_id, report
+
+
+class GluonKernel(TritonKernel):
+    """Compile, tune, execute and benchmark Gluon kernels through vFunc.
+
+    Accepts @gluon.jit and vanilla @triton.autotune wrapping @gluon.jit.
+    Uses the same constructor options, context, tensor transport and reports as
+    TritonKernel. Layouts can be constructed inside device code; non-scalar
+    constexpr arguments and host-side tensor descriptors remain unsupported.
+    """
+
+    frontend = "gluon"

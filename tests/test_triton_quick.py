@@ -320,3 +320,88 @@ def test_tiered_pruning_uses_valid_best_across_batches_then_regroups(monkeypatch
     )
     assert [ids for ids, _ in calls[3:]] == [["best", "near"]]
     assert entries[2][0]["status"] == "pilot_pruned"  # Exactly 2x is pruned.
+
+
+@pytest.mark.parametrize("layout", ["hex", "base32"])
+def test_selected_cache_restores_only_winner_and_verifies_integrity(tmp_path, layout):
+    import base64
+    import hashlib
+    import io
+    import tarfile
+
+    keys = ["12" * 32, "34" * 32]
+    directories = (
+        keys
+        if layout == "hex"
+        else [base64.b32encode(bytes.fromhex(k)).decode().rstrip("=") for k in keys]
+    )
+    files = {
+        f"cache/{d}/kernel.cubin": content
+        for d, content in zip(directories, [b"winner binary", b"loser binary"], strict=True)
+    }
+    artifact = tmp_path / "artifact"
+    artifact.mkdir()
+    archive = artifact / "cache.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+    manifest = {
+        "source_sha256": hashlib.sha256(b"source").hexdigest(),
+        "target": {},
+        "triton_version": "test",
+        "results": [
+            {"id": name, "cache_hash": key, "status": "compiled"}
+            for name, key in zip(["winner", "loser"], keys, strict=True)
+        ],
+        "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()},
+        "cache_archive": {"sha256": hashlib.sha256(archive.read_bytes()).hexdigest()},
+    }
+    (artifact / "manifest.json").write_text(json.dumps(manifest))
+    destination = tmp_path / "restored"
+    records = runner.restore_caches([artifact], destination, "source", {}, "test", {"winner"})
+    assert set(records) == {"winner"}
+    assert [p.read_bytes() for p in destination.rglob("*.cubin")] == [b"winner binary"]
+    manifest["files"][next(iter(files))] = "0" * 64
+    (artifact / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        runner.restore_caches([artifact], destination, "source", {}, "test", {"winner"})
+
+
+def test_single_job_replication_prepares_selected_cache_once(monkeypatch):
+    from contextlib import nullcontext
+    from pathlib import Path
+
+    torch = ModuleType("torch")
+    torch.cuda = SimpleNamespace(device_count=lambda: 3, device=lambda d: nullcontext(d))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    prepared = {"winner": {"status": "compiled"}}
+    calls = []
+
+    def restore(artifacts, cache, source, target, version, selected):
+        assert selected == {"winner"}
+        (cache / "winner.bin").write_bytes(b"binary")
+        calls.append("restore")
+        return prepared
+
+    def measure(**kwargs):
+        assert kwargs["prepared_cache"][1] is prepared
+        assert (Path(kwargs["prepared_cache"][0]) / "cache/winner.bin").exists()
+        calls.append("measure")
+        return {"status": "passed"}
+
+    monkeypatch.setattr(runner, "restore_caches", restore)
+    monkeypatch.setattr(runner, "benchmark_cycle", measure)
+    result = runner.benchmark_selected_replicas(
+        device_count=3,
+        variants='[{"id":"winner"}]',
+        artifacts=[],
+        source="source",
+        target={},
+        triton_version="test",
+    )
+    assert calls == ["restore", "measure", "measure", "measure"]
+    assert len(result["replica_reports"]) == 3
+    assert result["prepared_configurations"] == 1
+    assert result["prepared_cache_files"] == 1
