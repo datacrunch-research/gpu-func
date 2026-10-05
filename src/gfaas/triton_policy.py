@@ -31,13 +31,13 @@ class TritonPruning:
 class TritonBenchmark:
     """Trial counts and estimated compute budgets; durations are milliseconds."""
 
-    pilot_trials: int = 5
-    refinement_duration_ms: float = 10.0
+    pilot_trials: int = 3
+    refinement_duration_ms: float = 1.0
     min_refinement_trials: int = 10
-    max_refinement_trials: int = 100_000
+    max_refinement_trials: int = 250
     final_duration_ms: float = 25.0
     min_final_trials: int = 25
-    max_final_trials: int = 100_000
+    max_final_trials: int = 1000
     graph_duration_ms: float = 1.0
     min_calls_per_graph: int = 10
     max_calls_per_graph: int = 100

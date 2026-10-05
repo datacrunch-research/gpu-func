@@ -572,7 +572,7 @@ def final_benchmark(
     settings = benchmark or {}
     flush_iterations = settings.get("l2_flush_iterations", 100)
     final_us = settings.get("final_duration_ms", 25.0) * 1000
-    maximum = settings.get("max_final_trials", 100_000)
+    maximum = settings.get("max_final_trials", 1000)
     z = max(
         1,
         min(
@@ -759,7 +759,7 @@ def benchmark_cycle(
                 group = entries[offset : offset + policy["group_size"]]
                 values = ring_trials(
                     [c for _, c in group],
-                    [settings.get("pilot_trials", 5)] * len(group),
+                    [settings.get("pilot_trials", 3)] * len(group),
                     ring,
                     torch,
                     flush,
@@ -781,9 +781,9 @@ def benchmark_cycle(
                 group = survivors[offset : offset + policy["group_size"]]
                 counts = [
                     min(
-                        settings.get("max_refinement_trials", 100_000),
+                        settings.get("max_refinement_trials", 250),
                         math.ceil(
-                            settings.get("refinement_duration_ms", 10.0) * 1000 / r["pilot_us"]
+                            settings.get("refinement_duration_ms", 1.0) * 1000 / r["pilot_us"]
                         ),
                     )
                     for r, _ in group

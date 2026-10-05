@@ -269,13 +269,13 @@ tuning = vfunc.TritonTuning(
     pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
     refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
     benchmark=vfunc.TritonBenchmark(
-        pilot_trials=5,
-        refinement_duration_ms=10.0,
+        pilot_trials=3,
+        refinement_duration_ms=1.0,
         min_refinement_trials=10,
-        max_refinement_trials=100_000,
+        max_refinement_trials=250,
         final_duration_ms=25.0,
         min_final_trials=25,
-        max_final_trials=100_000,
+        max_final_trials=1000,
         graph_duration_ms=1.0,
         min_calls_per_graph=10,
         max_calls_per_graph=100,
@@ -300,7 +300,7 @@ budget. Durations must be finite and positive, counts must be positive integers,
 and minimum counts must not exceed their maximums.
 
 Each round retains times <= `best + max(relative_delta * best, absolute_us)`.
-Defaults allow 25% or 1 us in the five-trial pilot, then 5% or 0.1 us in
+Defaults allow 25% or 1 us in the three-trial pilot, then 5% or 0.1 us in
 refinement and global replica reduction, whichever allowance is larger. The
 pilot leaves more room for noisy early measurements. The smaller refined
 absolute allowance avoids replicating almost every configuration of a short
@@ -320,10 +320,10 @@ are bounded by `max_input_sets` (65,536) and `max_ring_bytes` (8 GiB); exceeding
 limits fails clearly. Reports include the ring footprint and allocation size.
 
 Pilot groups (eight variants by default) enqueue 100 L2 zeroing operations, then
-interleave five single-launch event trials per variant, rotating inputs without
+interleave three single-launch event trials per variant, rotating inputs without
 intermediate cache flushes. Synchronize once, take minima, and validate proposed
 new bests before using them for pruning. All pilot groups finish before survivors
-are regrouped. Refinement uses `ceil(10_000 / pilot_us)` launches per variant when
+are regrouped. Refinement uses up to `min(250, ceil(1_000 / pilot_us))` launches per variant when
 at least ten are required, returning each minimum. Reset runs outside timed
 intervals. Refined pruning uses a validated best; every survivor passes the
 optional evaluator before final timing. Without an evaluator correctness is assumed.
