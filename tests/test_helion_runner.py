@@ -65,3 +65,24 @@ def test_launch_matching_uses_types_and_options_when_names_and_constants_match(
     assert calls == ["1", "0"]
     with pytest.raises(RuntimeError, match="unprepared"):
         candidate(True)
+
+
+@pytest.mark.parametrize("name", ["helion_prepare", "helion_runner", "helion_compiler_runner"])
+def test_handlers_import_when_vfunc_loads_the_source_as_a_standalone_module(name):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(helion_runner.__file__).with_name(name + ".py")
+    spec = importlib.util.spec_from_file_location("standalone_" + name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert callable(
+        getattr(
+            module,
+            "prepare"
+            if name == "helion_prepare"
+            else "compile_batch"
+            if name == "helion_compiler_runner"
+            else "benchmark_cycle",
+        )
+    )

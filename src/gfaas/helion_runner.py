@@ -9,7 +9,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from .helion_compat import installed_version
+from gfaas.helion_compat import installed_version
 
 
 def restore_variants(
