@@ -51,6 +51,9 @@ __all__ = [
     "StageArtifactBinding",
     "TritonKernel",
     "GluonKernel",
+    "CutlassKernel",
+    "CutlassTuning",
+    "CutlassCompilationError",
     "TritonTuning",
     "TritonBenchmark",
     "TritonPruning",
@@ -70,6 +73,10 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name in {"CutlassKernel", "CutlassTuning", "CutlassCompilationError"}:
+        from . import cutlass_kernel
+
+        return getattr(cutlass_kernel, name)
     if name in {"Client", "RemoteResult"}:
         from .client import Client, RemoteResult
 

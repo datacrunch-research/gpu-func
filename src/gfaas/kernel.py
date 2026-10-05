@@ -55,7 +55,7 @@ class KernelBenchmark:
 
 
 class Kernel(ABC):
-    """Base for vFunc-managed kernel calls; currently implemented by TritonKernel."""
+    """Base for vFunc-managed Triton and C++ CUTLASS kernel calls."""
 
     def __getitem__(self, grid: Any) -> KernelCall:
         return KernelCall(self, grid)
@@ -81,15 +81,18 @@ class KernelCall:
 
 
 def benchmark(
-    call: KernelCall, *args: Any, options: KernelBenchmark | None = None, **kwargs: Any
+    call: KernelCall | Kernel, *args: Any, options: KernelBenchmark | None = None, **kwargs: Any
 ) -> Any:
     """Autotune if necessary, then freshly measure the winner on distinct GPUs.
 
     Use benchmark(kernel[grid], *args, options=KernelBenchmark(...), **kwargs)
+    for Triton, or benchmark(kernel, *args, ...) for a C++ CUTLASS launcher,
     inside app.function. Benchmarking leaves the caller's tensors unchanged.
     """
+    if isinstance(call, Kernel):
+        call = KernelCall(call, None)
     if not isinstance(call, KernelCall) or not isinstance(call.kernel, Kernel):
-        raise TypeError("benchmark requires a vFunc Kernel launch, such as kernel[grid]")
+        raise TypeError("benchmark requires a vFunc Kernel or Kernel launch")
     if options is not None and not isinstance(options, KernelBenchmark):
         raise TypeError("options must be KernelBenchmark")
     return call.kernel._invoke(call.grid, args, kwargs, options or KernelBenchmark())

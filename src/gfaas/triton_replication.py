@@ -65,11 +65,18 @@ def benchmark_shards(
         identity = None
         try:
             worker = function
+            replicas_handler = triton_quick_runner.benchmark_replicas
+            selected_handler = triton_quick_runner.benchmark_selected_replicas
+            if request.get("backend") == "cutlass":
+                from . import cutlass_runner
+
+                replicas_handler = cutlass_runner.benchmark_replicas
+                selected_handler = cutlass_runner.benchmark_selected_replicas
             extra = {}
             if single_job and isinstance(function, Function):
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_selected_replicas,
+                    handler=selected_handler,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )
@@ -77,7 +84,7 @@ def benchmark_shards(
             elif final_only and isinstance(function, Function) and policy.replication_factor > 1:
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_replicas,
+                    handler=replicas_handler,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )

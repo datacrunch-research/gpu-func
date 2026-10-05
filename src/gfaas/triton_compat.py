@@ -7,6 +7,7 @@ uses conservative types: runtime values/alignment are not promoted to constants.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import types
 from typing import Any
@@ -24,7 +25,7 @@ def _types(frontend: str = "triton") -> tuple[Any, Any]:
         raise UnsupportedTritonKernelError("Install Triton in the client environment") from error
     if frontend == "gluon":
         try:
-            from triton.experimental.gluon import GluonJITFunction
+            from triton.experimental.gluon import GluonJITFunction  # type: ignore[import-not-found]
         except ImportError as error:
             raise UnsupportedTritonKernelError("Installed Triton does not provide Gluon") from error
         return GluonJITFunction, Autotuner
@@ -36,16 +37,18 @@ def _types(frontend: str = "triton") -> tuple[Any, Any]:
 def ast_source_type(kernel: Any) -> Any:
     """Select the frontend's AST source, probing public API before a legacy adapter."""
     if callable(getattr(kernel, "is_gluon", None)) and kernel.is_gluon():
-        from triton.experimental import gluon
+        from triton.experimental import gluon  # type: ignore[import-not-found]
 
         public = getattr(gluon, "GluonASTSource", None)
         if public is not None:
             return public
         # Triton 3.8 and earlier expose this only in the runtime module.
-        from triton.experimental.gluon._runtime import GluonASTSource
+        GluonASTSource = importlib.import_module(
+            "triton.experimental.gluon._runtime"
+        ).GluonASTSource
 
         return GluonASTSource
-    from triton.compiler import ASTSource
+    from triton.compiler import ASTSource  # type: ignore[import-not-found]
 
     return ASTSource
 
