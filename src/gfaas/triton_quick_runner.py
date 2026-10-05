@@ -1059,18 +1059,34 @@ def benchmark_selected_replicas(*, device_count: int, **kwargs: Any) -> dict[str
 
     if torch.cuda.device_count() != device_count:
         raise RuntimeError("Benchmark Call did not receive its requested GPU count")
+    backend = kwargs.get("backend", "triton")
+    if "cute_version" in kwargs:
+        backend = kwargs["backend"] = "cute"
+        kwargs["triton_version"] = kwargs.pop("cute_version")
     selected = {v["id"] for v in json.loads(kwargs["variants"])}
     with tempfile.TemporaryDirectory(prefix="vfunc-selected-") as folder:
         cache = Path(folder) / "cache"
         cache.mkdir()
-        prepared = restore_caches(
-            kwargs["artifacts"],
-            cache,
-            kwargs["source"],
-            kwargs["target"],
-            kwargs["triton_version"],
-            selected,
-        )
+        prepared: Any
+        if backend == "cute":
+            from gfaas import cute_backend
+
+            prepared = cute_backend.load_artifacts(
+                kwargs["artifacts"],
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                json.loads(kwargs["variants"]),
+            )
+        else:
+            prepared = restore_caches(
+                kwargs["artifacts"],
+                cache,
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                selected,
+            )
         reports = []
         for device in range(device_count):
             with torch.cuda.device(device):

@@ -185,6 +185,7 @@ class CuteDSLKernel(Kernel):
                 },
                 policy,
                 [],
+                single_job=True,
             )
             winner = next(r for r in report["results"] if r["id"] == report["best_id"])
             report.update(

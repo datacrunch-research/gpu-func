@@ -103,7 +103,9 @@ class FakeClient:
                 }
 
             report = (
-                {"replica_reports": [result("gpu1", 11), result("gpu2", 12)]}
+                {"replica_reports": [result("gpu0", 10), result("gpu1", 11), result("gpu2", 12)]}
+                if name == "benchmark_selected_replicas"
+                else {"replica_reports": [result("gpu1", 11), result("gpu2", 12)]}
                 if name == "benchmark_replicas"
                 else result("gpu0", 10)
             )
@@ -169,6 +171,7 @@ def test_cold_and_cached_calls_share_tuning_and_distinct_gpu_benchmarks(launch_f
     assert client.phases.count("compile_batch") == 2
     assert client.phases.count("probe_environment") == 1
     assert client.phases.count("benchmark_cycle") == 1
+    assert client.phases.count("benchmark_selected_replicas") == 2
     assert client.phases.count("execute_winner") == 1 + int(launch_first)
     assert next(iter(kernel.tuning_results.values()))["benchmark"]["best_runtime_us"] == 11
     assert first["configuration"] == second["configuration"]
@@ -258,3 +261,43 @@ def test_exported_runtime_status_is_not_a_python_host_return(monkeypatch, tmp_pa
     assert launch(3) is None
     assert calls == [(3,)]
     assert launch.module is loaded
+
+
+def test_single_job_cute_replication_verifies_objects_once(monkeypatch, tmp_path):
+    import sys
+    from contextlib import nullcontext
+
+    from gfaas import cute_backend, triton_quick_runner
+
+    torch = types.ModuleType("torch")
+    torch.cuda = SimpleNamespace(device_count=lambda: 3, device=lambda d: nullcontext(d))
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    prepared = {"winner": tmp_path / "kernel.o"}
+    calls = []
+
+    def load(artifacts, source, target, version, variants):
+        assert version == "4.8.0" and variants == [{"id": "winner"}]
+        calls.append("load")
+        return prepared
+
+    def measure(**kwargs):
+        assert kwargs["prepared_cache"][1] is prepared
+        assert kwargs["backend"] == "cute" and kwargs["triton_version"] == "4.8.0"
+        assert kwargs["final_only"]
+        calls.append("measure")
+        return {"status": "passed"}
+
+    monkeypatch.setattr(cute_backend, "load_artifacts", load)
+    monkeypatch.setattr(triton_quick_runner, "benchmark_cycle", measure)
+    report = triton_quick_runner.benchmark_selected_replicas(
+        device_count=3,
+        variants='[{"id":"winner"}]',
+        artifacts=[],
+        source="source",
+        target={},
+        cute_version="4.8.0",
+        final_only=True,
+    )
+    assert calls == ["load", "measure", "measure", "measure"]
+    assert len(report["replica_reports"]) == 3
+    assert report["prepared_configurations"] == 1

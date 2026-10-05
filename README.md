@@ -505,6 +505,8 @@ dtypes without allocating GPU inputs. They export independent object files using
 CuTe's public AOT API. GPU workers verify and load only requested objects, then
 reuse the shared input-ring and measurement pipeline. Compilations use isolated
 processes to avoid sharing CuTe's compiler state between configurations.
+Standalone benchmarks request only the winning compiler shard and measure all
+assigned replicas in one GPU job, verifying the selected object files once.
 
 See `examples/cute_kernel.py` for the full client example and
 `examples/cute_kernels.py` for vector addition, a callable class performing
