@@ -67,13 +67,15 @@ def benchmark_shards(
         try:
             worker = function
             extra = {}
-            if (
-                single_job
-                and isinstance(function, Function)
-                or final_only
-                and isinstance(function, Function)
-                and policy.replication_factor > 1
-            ):
+            if single_job and isinstance(function, Function):
+                worker = replace(
+                    function,
+                    handler=replica_handler or triton_quick_runner.benchmark_selected_replicas,
+                    gpu=None,
+                    gpu_count=policy.replication_factor,
+                )
+                extra = {"device_count": policy.replication_factor}
+            elif final_only and isinstance(function, Function) and policy.replication_factor > 1:
                 worker = replace(
                     function,
                     handler=replica_handler or triton_quick_runner.benchmark_replicas,
