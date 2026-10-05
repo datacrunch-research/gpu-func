@@ -115,6 +115,11 @@ def main():
             ),
         ),
         (increment, evaluate_increment, (torch.zeros(2**20),)),
+        (
+            square_and_sum,
+            evaluate_square_and_sum,
+            (torch.randn((1024, 1024), generator=generator),),
+        ),
     ]
     with app.function(gpu="gb300", timeout=600, capacity_wait=600):
         for native, evaluate, inputs in cases:
@@ -131,7 +136,12 @@ def main():
             measured = vfunc.benchmark(
                 kernel, *inputs, options=vfunc.KernelBenchmark(replication_factor=3)
             )
-            print(native.fn.__name__, tuple(output.shape), measured["runtime_us"], "us")
+            shapes = (
+                tuple(output.shape)
+                if isinstance(output, torch.Tensor)
+                else [tuple(tensor.shape) for tensor in output]
+            )
+            print(native.fn.__name__, shapes, measured["runtime_us"], "us")
             print("Selected configuration:", measured["configuration"]["configuration"])
             print("Replicas:", [(r["gpu_uuid"], r["runtime_us"]) for r in measured["replicas"]])
 
