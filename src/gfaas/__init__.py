@@ -50,6 +50,7 @@ __all__ = [
     "RemoteResult",
     "StageArtifactBinding",
     "TritonKernel",
+    "TLXKernel",
     "TritonTuning",
     "TritonBenchmark",
     "TritonPruning",
@@ -91,6 +92,10 @@ def __getattr__(name: str):
         from . import triton_kernel
 
         return getattr(triton_kernel, name)
+    if name == "TLXKernel":
+        from .tlx_kernel import TLXKernel
+
+        return TLXKernel
     if name == "TritonBenchmarkError":
         from .triton_replication import TritonBenchmarkError
 

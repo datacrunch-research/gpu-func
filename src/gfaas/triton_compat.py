@@ -7,6 +7,7 @@ uses conservative types: runtime values/alignment are not promoted to constants.
 from __future__ import annotations
 
 import ast
+import importlib
 import inspect
 import types
 from typing import Any
@@ -222,6 +223,16 @@ def source_bundle(kernel: Any) -> str:
                         f"Unsupported source dependency: {referenced}"
                     )
                 imports[referenced] = f"import {value.__name__} as {referenced}"
+            elif getattr(value, "__module__", "") == "triton.language.extra.tlx" or getattr(
+                value, "__module__", ""
+            ).startswith("triton.language.extra.tlx."):
+                module = importlib.import_module(value.__module__)
+                symbol = getattr(value, "__name__", "")
+                if not symbol.isidentifier() or getattr(module, symbol, None) is not value:
+                    raise UnsupportedTritonKernelError(
+                        f"Unsupported TLX source dependency: {referenced}"
+                    )
+                imports[referenced] = f"from {module.__name__} import {symbol} as {referenced}"
             elif value is None or type(value) in (bool, int, float, str, tuple):
                 constants[referenced] = f"{referenced} = {value!r}"
             else:

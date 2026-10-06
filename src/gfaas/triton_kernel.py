@@ -96,7 +96,7 @@ class TritonKernel(Kernel):
         max_concurrent_jobs: int = 8,
         cache_compression_level: int = 1,
     ) -> None:
-        _, configurations = validate_kernel(kernel)
+        _, configurations = self._validate_kernel(kernel)
         if variants_per_job is not None and variants_per_job < 1:
             raise ValueError("Invalid variants per compiler job")
         if not 1 <= max_concurrent_jobs <= 32:
@@ -117,6 +117,12 @@ class TritonKernel(Kernel):
         self._cache: dict[tuple[int, str], Any] = {}
         self._results: dict[str, Any] = {}
         self._lock = RLock()
+
+    def _validate_kernel(self, kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
+        return validate_kernel(kernel)
+
+    def _source_bundle(self, kernel: Any) -> str:
+        return source_bundle(kernel)
 
     @property
     def tuning_results(self) -> Any:
@@ -199,7 +205,8 @@ class TritonKernel(Kernel):
     ) -> Any:
         import triton  # type: ignore[import-not-found]
 
-        jit, configs = validate_kernel(self.kernel)  # Revalidate mutable wrappers at invocation.
+        # Revalidate mutable wrappers at invocation.
+        jit, configs = self._validate_kernel(self.kernel)
         if not hasattr(jit, "params") or not callable(getattr(jit, "fn", None)):
             raise UnsupportedTritonKernelError("Unrecognized JIT signature interface")
         parameters = {p.name: p for p in jit.params}
@@ -265,7 +272,7 @@ class TritonKernel(Kernel):
             if variant["id"] not in variant_ids:
                 variants.append(variant)
                 variant_ids.add(variant["id"])
-        source = source_bundle(jit)
+        source = self._source_bundle(jit)
         import cloudpickle
 
         inputs = snapshot_inputs(args, argument_kwargs)
@@ -391,7 +398,7 @@ class TritonKernel(Kernel):
 
         grid, evaluate = cloudpickle.loads(cached["callbacks"])
         reset, restore = reset_arguments(self.kernel)
-        jit, _ = validate_kernel(self.kernel)
+        jit, _ = self._validate_kernel(self.kernel)
         policy = options.tuning_policy()
         function = replace(self.gpu_function, handler=triton_quick_runner.benchmark_selected)
         calls: list[str] = []

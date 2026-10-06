@@ -189,6 +189,16 @@ def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
         def __exit__(self, *a):
             pass
 
+    class Capture(Context):
+        def __enter__(self):
+            import gc
+            assert not gc.isenabled()
+            return self
+
+        def __exit__(self, *a):
+            import gc
+            assert not gc.isenabled()
+
     class Stream:
         def wait_stream(self, other):
             pass
@@ -234,7 +244,7 @@ def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
             stream=lambda s: Context(),
             graph_pool_handle=lambda: 1,
             CUDAGraph=Graph,
-            graph=lambda *a, **k: Context(),
+            graph=lambda *a, **k: Capture(),
             Event=Event,
         )
     )
@@ -246,6 +256,22 @@ def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
     assert result["runtime_us"] == runtime
     replays = [identity for item in log if isinstance(item, tuple) for identity in [item[1]]]
     assert replays[:6] == [i % graphs for i in range(6)]
+
+
+@pytest.mark.parametrize('initially_enabled', [True, False])
+def test_capture_gc_guard_restores_state_after_failure(initially_enabled):
+    import gc
+
+    from gfaas.triton_quick_runner import _suspend_cyclic_gc
+    original = gc.isenabled()
+    try:
+        (gc.enable if initially_enabled else gc.disable)()
+        with pytest.raises(RuntimeError, match='capture failed'), _suspend_cyclic_gc():
+            assert not gc.isenabled()
+            raise RuntimeError('capture failed')
+        assert gc.isenabled() == initially_enabled
+    finally:
+        (gc.enable if original else gc.disable)()
 
 
 class FakeBenchmark:

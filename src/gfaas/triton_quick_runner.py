@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import ctypes
+import gc
 import hashlib
 import importlib.util
 import inspect
@@ -14,9 +15,27 @@ import os
 import sys
 import tarfile
 import tempfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any
+
+
+@contextmanager
+def _suspend_cyclic_gc():
+    """Keep unreachable compiled kernels from unloading CUDA modules in capture.
+
+    A previous benchmark can leave a reference cycle whose destructor calls
+    cuModuleUnload. Allocations during graph capture can otherwise trigger its
+    collection and invalidate the capture stream. Reference-count cleanup is
+    unchanged; preserve the caller's cyclic-GC state, including on failure.
+    """
+    enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if enabled:
+            gc.enable()
 
 
 def probe_target(device_index: int = 0) -> dict[str, Any]:
@@ -647,7 +666,7 @@ def final_benchmark(
                 ring.reset(*args, **kwargs)
         capture_stream.synchronize()
         graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph, stream=capture_stream, pool=pool):
+        with _suspend_cyclic_gc(), torch.cuda.graph(graph, stream=capture_stream, pool=pool):
             for args, kwargs in sets:
                 candidate(*args, **kwargs)
         graphs.append((graph, sets))
