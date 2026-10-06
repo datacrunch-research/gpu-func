@@ -704,7 +704,7 @@ def benchmark_cycle(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource  # type: ignore[import-not-found]
+    from triton.compiler import ASTSource
 
     if probe_target(torch.cuda.current_device()) != target or triton.__version__ != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
@@ -979,7 +979,7 @@ def execute_winner(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource  # type: ignore[import-not-found]
+    from triton.compiler import ASTSource
 
     from gfaas.triton_inputs import SnapshotInputs, snapshot_inputs
 
