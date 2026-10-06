@@ -261,14 +261,14 @@ def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
 @pytest.mark.parametrize('initially_enabled', [True, False])
 def test_capture_gc_guard_restores_state_after_failure(initially_enabled):
     import gc
+
     from gfaas.triton_quick_runner import _suspend_cyclic_gc
     original = gc.isenabled()
     try:
         (gc.enable if initially_enabled else gc.disable)()
-        with pytest.raises(RuntimeError, match='capture failed'):
-            with _suspend_cyclic_gc():
-                assert not gc.isenabled()
-                raise RuntimeError('capture failed')
+        with pytest.raises(RuntimeError, match='capture failed'), _suspend_cyclic_gc():
+            assert not gc.isenabled()
+            raise RuntimeError('capture failed')
         assert gc.isenabled() == initially_enabled
     finally:
         (gc.enable if original else gc.disable)()
