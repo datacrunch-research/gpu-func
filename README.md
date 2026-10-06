@@ -390,7 +390,7 @@ Function settings and CPU-prepared artifacts; no service deployment is required.
 ### Benchmark a selected kernel configuration
 
 `benchmark` accepts vFunc-managed launch handles (`Kernel`, currently
-`TritonKernel`). It autotunes an uncached specialization before measuring its
+`TritonKernel` and `CutlassKernel`). It autotunes an uncached specialization before measuring its
 selected configuration. A cached specialization reuses its compiler artifacts
 and configuration, then obtains fresh timings. Benchmarking leaves the caller's
 tensors unchanged and inherits the kernel's optional correctness evaluator and
@@ -427,12 +427,13 @@ phase: CUDA graphs for short kernels, direct events for longer kernels or when
 graph padding would exceed memory limits. Estimates size the graph and trial
 counts; the final duration is an estimated compute budget, rather than a wall-time
 deadline. `max_final_trials` counts graph replays or individual direct calls.
-Replication uses the same verified distinct-GPU scheme as autotuning, with no
-configuration pruning because only the selected variant is benchmarked. Initial
-measurement counts toward the replication factor; replica calls reuse that fresh
-duration estimate. There is currently one variant per job, so the concurrency
-limit only bounds replica dispatch and does not increase parallelism within a
-multi-GPU replica call.
+Standalone replication reserves all R GPUs in one job. The job verifies and
+restores the selected configuration once, then estimates and measures it on each
+GPU separately. Physical GPU UUIDs must be distinct. No configuration pruning
+is needed. The selected compiler shard remains a compressed batch: its archive
+is scanned, but only the winner's cache files are restored. Other compiler
+shards are not requested. The concurrency setting does not parallelize devices
+within this job.
 
 The returned report is immutable and includes `runtime_us`, `configuration`,
 `replicas`, `specialization`, `autotuned`, `reused_specialization`, raw shard
@@ -526,7 +527,9 @@ on the supplied current CUDA stream, and returns zero on success. It must consum
 host metadata before returning; the arrays are temporary. Launch geometry and
 CUTLASS workspace handling belong in the C++ launcher (workspace tensors can be
 supplied as ordinary arguments). Graph benchmarking requires a capture-compatible
-launcher. Nonzero status or a CUDA synchronization failure fails the job.
+launcher. During tuning, a nonzero launch status rejects that variant after a
+healthy synchronization check; a CUDA synchronization fault terminates the job.
+An ordinary selected-kernel call propagates a nonzero launch status.
 
 The wrapper preserves tensor views, storage aliases and client object identity.
 Benchmark calls measure scratch copies and leave client tensors unchanged;
