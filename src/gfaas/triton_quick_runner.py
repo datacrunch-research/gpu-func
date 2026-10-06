@@ -158,11 +158,13 @@ def bound_candidate(
 def l2_flush_buffer(torch: Any) -> Any:
     cuda = ctypes.CDLL("libcuda.so.1")
     size = ctypes.c_int()
-    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE. The job exposes one device.
+    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE for the current replica device.
     status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, torch.cuda.current_device())
     if status or size.value <= 0:
         raise RuntimeError("Cannot determine GPU L2 cache size")
-    return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
+    return torch.empty(
+        2 * size.value, dtype=torch.uint8, device=f"cuda:{torch.cuda.current_device()}"
+    )
 
 
 def measure_quick(
@@ -336,7 +338,8 @@ def quick_benchmark(
     import torch  # type: ignore[import-not-found]
     import triton  # type: ignore[import-not-found]
     from triton.backends.compiler import GPUTarget  # type: ignore[import-not-found]
-    from triton.compiler import ASTSource  # type: ignore[import-not-found]
+
+    from gfaas.triton_compat import ast_source_type
 
     if probe_target() != target or triton.__version__ != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
@@ -365,6 +368,7 @@ def quick_benchmark(
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
         signature = inspect.signature(jit.fn)
+        ASTSource = ast_source_type(jit)
         modern = "constexprs" in inspect.signature(ASTSource).parameters
 
         def fresh_inputs() -> tuple[Any, Any]:
@@ -392,13 +396,15 @@ def quick_benchmark(
             before = {
                 p: (p.stat().st_mtime_ns, p.stat().st_size)
                 for p in cache.rglob("*")
-                if p.is_file() and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
+                if p.is_file()
+                and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir", ".glir"}
             }
             compiled = triton.compile(ast, target=GPUTarget(**target), options=variant["options"])
             after = {
                 p: (p.stat().st_mtime_ns, p.stat().st_size)
                 for p in cache.rglob("*")
-                if p.is_file() and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
+                if p.is_file()
+                and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir", ".glir"}
             }
             if before != after:
                 raise RuntimeError("GPU preparation unexpectedly recompiled a prepared variant")
@@ -477,7 +483,12 @@ class InputRing:
         self.footprint_bytes: int = 0
         self.append()
         count = l2_bytes // self.footprint_bytes + 1
-        self.ensure(count)
+        # Tiny inputs can require hundreds of thousands of allocations to exceed
+        # L2. Keep one set within the user's limits and evict before each timed
+        # call instead. A single set that exceeds the memory limit still fails.
+        self.requires_flush = count > max_sets or count * self.allocated_bytes > max_bytes
+        if not self.requires_flush:
+            self.ensure(count)
 
     def append(self) -> None:
         if len(self.sets) >= self.max_sets:
@@ -582,6 +593,9 @@ def ring_trials(
                 continue
             args, kwargs = ring.next()
             ring.reset(*args, **kwargs)
+            if getattr(ring, "requires_flush", False):
+                # Eviction and reset remain outside the measured kernel interval.
+                flush.zero_()
             start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
             start.record()
             candidate(*args, **kwargs)
@@ -611,9 +625,13 @@ def final_benchmark(
         ),
     )
     padded_sets = math.ceil(len(ring.sets) / z) * z if ring is not None else z
-    graph_fits = padded_sets <= getattr(ring, "max_sets", math.inf) and padded_sets * (
-        getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0
-    ) <= getattr(ring, "max_bytes", math.inf)
+    graph_fits = (
+        not getattr(ring, "requires_flush", False)
+        and padded_sets <= getattr(ring, "max_sets", math.inf)
+        and padded_sets
+        * (getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0)
+        <= getattr(ring, "max_bytes", math.inf)
+    )
     if z < settings.get("min_calls_per_graph", 10) or not graph_fits:
         count = min(
             maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
@@ -622,7 +640,9 @@ def final_benchmark(
         return {
             "runtime_us": min(trials),
             "trial_us": trials,
-            "method": "events-ring",
+            "method": "events-ring-flush"
+            if getattr(ring, "requires_flush", False)
+            else "events-ring",
             "calls_per_graph": 0,
             "iterations": count,
         }
@@ -702,7 +722,8 @@ def benchmark_cycle(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource
+
+    from gfaas.triton_compat import ast_source_type
 
     if probe_target(torch.cuda.current_device()) != target or triton.__version__ != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
@@ -762,6 +783,7 @@ def benchmark_cycle(
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
         signature = inspect.signature(jit.fn)
+        ASTSource = ast_source_type(jit)
         modern = "constexprs" in inspect.signature(ASTSource).parameters
         entries = []
         for variant in variants_list:
@@ -785,7 +807,8 @@ def benchmark_cycle(
                 return {
                     str(p): (p.stat().st_mtime_ns, p.stat().st_size)
                     for p in cache.rglob("*")
-                    if p.is_file() and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
+                    if p.is_file()
+                    and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir", ".glir"}
                 }
 
             before = snapshot()
@@ -929,7 +952,12 @@ def benchmark_cycle(
             "ring_footprint_bytes": ring.footprint_bytes,
             "ring_allocated_bytes": ring.allocated_bytes,
             "l2_bytes": flush.numel() // 2,
-            "cache_assumption": "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic.",
+            "cache_assumption": (
+                "Input ring cannot exceed L2 within configured limits; explicitly evict before each timed call."
+                if ring.requires_flush
+                else "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic."
+            ),
+            "explicit_eviction": ring.requires_flush,
         }
 
 
@@ -961,8 +989,8 @@ def execute_winner(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource
 
+    from gfaas.triton_compat import ast_source_type
     from gfaas.triton_inputs import SnapshotInputs, snapshot_inputs
 
     if probe_target() != target or triton.__version__ != triton_version:
@@ -984,6 +1012,7 @@ def execute_winner(
         sys.modules[name] = module
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
+        ASTSource = ast_source_type(jit)
         kinds, constants = variant["signature"], variant["constants"]
         if "constexprs" in inspect.signature(ASTSource).parameters:
             ast = ASTSource(jit, kinds, constexprs=constants)

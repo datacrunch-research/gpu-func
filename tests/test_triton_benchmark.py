@@ -74,16 +74,18 @@ def test_ring_exceeds_l2_and_rejects_cross_set_aliases_and_limits():
         InputRing(
             lambda _: ((Tensor(2),), {"N": 2}), lambda *a, **k: None, metadata, torch, 16, 10, 100
         )
-    with pytest.raises(ValueError, match="max_input_sets"):
-        InputRing(
+    for max_sets, max_bytes in [(2, 100), (10, 16)]:
+        bounded = InputRing(
             lambda _: ((Tensor(next(pointers)),), {"N": 2}),
             lambda *a, **k: None,
             metadata,
             torch,
             16,
-            2,
-            100,
+            max_sets,
+            max_bytes,
         )
+        assert len(bounded.sets) == 1 and bounded.requires_flush
+        assert bounded.allocated_bytes == 8
     with pytest.raises(ValueError, match="max_ring_bytes"):
         InputRing(
             lambda _: ((Tensor(next(pointers)),), {"N": 2}),
@@ -92,7 +94,7 @@ def test_ring_exceeds_l2_and_rejects_cross_set_aliases_and_limits():
             torch,
             16,
             10,
-            16,
+            4,
         )
 
 
@@ -461,3 +463,63 @@ def test_graph_padding_falls_back_to_events_when_ring_memory_is_bounded(monkeypa
     result = final_benchmark(None, 5, ring, None, None)
     assert result["method"] == "events-ring"
     assert result["calls_per_graph"] == 0
+
+
+def test_bounded_ring_evicts_outside_event_timing_and_disables_graphs(monkeypatch):
+    log = []
+
+    class Event:
+        def __init__(self, **kwargs):
+            pass
+
+        def record(self):
+            log.append("event")
+
+        def elapsed_time(self, other):
+            return 0.005
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(Event=Event, synchronize=lambda: log.append("sync"))
+    )
+    ring = SimpleNamespace(
+        requires_flush=True,
+        sets=[((), {})],
+        max_sets=1,
+        allocated_bytes=8,
+        max_bytes=8,
+        next=lambda: ((), {}),
+        reset=lambda *a, **k: log.append("reset"),
+    )
+    flush = SimpleNamespace(zero_=lambda: log.append("flush"))
+    timing = final_benchmark(
+        lambda: log.append("kernel"),
+        5,
+        ring,
+        torch,
+        flush,
+        {"l2_flush_iterations": 2, "max_final_trials": 3, "min_final_trials": 1},
+    )
+    assert timing["method"] == "events-ring-flush"
+    assert timing["calls_per_graph"] == 0
+    assert log == ["flush"] * 2 + ["reset", "flush", "event", "kernel", "event"] * 3 + ["sync"]
+
+
+def test_l2_eviction_buffer_uses_current_replica_device(monkeypatch):
+    from gfaas import triton_quick_runner as runner
+
+    def attribute(result, name, device):
+        assert name == 38 and device == 2
+        result._obj.value = 4096
+        return 0
+
+    monkeypatch.setattr(
+        runner.ctypes, "CDLL", lambda _: SimpleNamespace(cuDeviceGetAttribute=attribute)
+    )
+    allocations = []
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(current_device=lambda: 2),
+        uint8="uint8",
+        empty=lambda size, **kwargs: allocations.append((size, kwargs)) or "buffer",
+    )
+    assert runner.l2_flush_buffer(torch) == "buffer"
+    assert allocations == [(8192, {"dtype": "uint8", "device": "cuda:2"})]

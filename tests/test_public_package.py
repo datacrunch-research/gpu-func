@@ -35,6 +35,7 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "RemoteResult",
         "StageArtifactBinding",
         "TritonKernel",
+        "GluonKernel",
         "TritonTuning",
         "TritonBenchmark",
         "TritonPruning",

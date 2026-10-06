@@ -755,3 +755,43 @@ def test_launch_cached_benchmark_requests_only_winners_compiler_shard():
         )
     assert result["configuration"]["constants"]["BLOCK"] == 32
     assert len(result["benchmark_call_ids"]) == 1
+layout_constructor: Any = None
+
+
+def gluon_body(X, N, BLOCK):
+    offsets = layout_constructor([1], [32], [4], [0])
+    return offsets
+
+
+@pytest.mark.parametrize("autotuned", [False, True])
+def test_gluon_wrapper_preserves_frontend_and_layout_imports(monkeypatch, autotuned):
+    from gfaas import GluonKernel
+    from gfaas.triton_compat import source_bundle, validate_kernel
+
+    class GluonJIT(JIT):
+        pass
+
+    gluon = ModuleType("triton.experimental.gluon")
+    gluon.GluonJITFunction = GluonJIT
+    monkeypatch.setitem(sys.modules, "triton.experimental.gluon", gluon)
+    layout = type("BlockedLayout", (), {"__module__": "triton.experimental.gluon.language"})
+    monkeypatch.setitem(gluon_body.__globals__, "layout_constructor", layout)
+    jit = GluonJIT(gluon_body)
+    native = (
+        Autotuner(jit, jit.arg_names, [Config({"BLOCK": 64})], [], [], []) if autotuned else jit
+    )
+    wrapper = GluonKernel(native)
+    assert wrapper.frontend == "gluon"
+    assert validate_kernel(native, "gluon")[0] is jit
+    with pytest.raises(UnsupportedTritonKernelError):
+        NativeTritonKernel(native)
+    with pytest.raises(UnsupportedTritonKernelError):
+        GluonKernel(JIT(add))
+    source = source_bundle(jit, "gluon")
+    assert "from triton.experimental import gluon as vfunc_gluon" in source
+    assert "@vfunc_gluon.jit()" in source
+    assert "import BlockedLayout as layout_constructor" in source
+    assert "@triton.jit" not in source
+    jit.pre_run_hooks = [lambda: None]
+    with pytest.raises(UnsupportedTritonKernelError, match="callback"):
+        validate_kernel(native, "gluon")

@@ -40,3 +40,20 @@ def test_empty_bundle_is_deterministic() -> None:
     assert first == second
     with tarfile.open(fileobj=io.BytesIO(first.data), mode="r:gz") as archive:
         assert archive.getnames() == [".gfaas-empty"]
+
+
+def test_configmap_sdk_mount_preserves_import_namespace(tmp_path: Path) -> None:
+    mount = tmp_path / "gfaas"
+    physical = mount / "..2026_10_05_22_16_50"
+    physical.mkdir(parents=True)
+    (physical / "__init__.py").write_text("VALUE = 7\n")
+    (physical / "bundle.py").write_text("# bundled SDK\n")
+    (mount / "__init__.py").symlink_to(physical / "__init__.py")
+    source = tmp_path / "kernel.py"
+    source.write_text("def run(): return 1\n")
+    sdk_root = (mount / "__init__.py").resolve().parent
+    bundle = package_single_file(source, package_root=sdk_root)
+    with tarfile.open(fileobj=io.BytesIO(bundle.data), mode="r:gz") as archive:
+        assert set(archive.getnames()) == {
+            "kernel.py", "gfaas/__init__.py", "gfaas/bundle.py"
+        }
