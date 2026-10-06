@@ -66,7 +66,21 @@ def benchmark_shards(
         try:
             worker = function
             extra = {}
-            if single_job and isinstance(function, Function):
+            if (
+                request.get("backend") == "cuda"
+                and isinstance(function, Function)
+                and (single_job or final_only)
+            ):
+                from .cuda_kernel_runner import benchmark_replicas
+
+                worker = replace(
+                    function,
+                    handler=benchmark_replicas,
+                    gpu=None,
+                    gpu_count=policy.replication_factor,
+                )
+                extra = {"device_count": policy.replication_factor}
+            elif single_job and isinstance(function, Function):
                 worker = replace(
                     function,
                     handler=triton_quick_runner.benchmark_selected_replicas,
