@@ -55,7 +55,7 @@ class KernelBenchmark:
 
 
 class Kernel(ABC):
-    """Base for vFunc-managed kernel calls; currently implemented by TritonKernel."""
+    """Base for vFunc-managed kernel calls; implemented by TritonKernel and CUDAKernel."""
 
     def __getitem__(self, grid: Any) -> KernelCall:
         return KernelCall(self, grid)

@@ -66,10 +66,15 @@ def benchmark_shards(
         try:
             worker = function
             extra = {}
+            cuda_backend = request.get("backend") == "cuda"
+            from . import cuda_kernel_runner
+
             if single_job and isinstance(function, Function):
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_selected_replicas,
+                    handler=cuda_kernel_runner.benchmark_replicas
+                    if cuda_backend
+                    else triton_quick_runner.benchmark_selected_replicas,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )
@@ -77,7 +82,9 @@ def benchmark_shards(
             elif final_only and isinstance(function, Function) and policy.replication_factor > 1:
                 worker = replace(
                     function,
-                    handler=triton_quick_runner.benchmark_replicas,
+                    handler=cuda_kernel_runner.benchmark_replicas
+                    if cuda_backend
+                    else triton_quick_runner.benchmark_replicas,
                     gpu=None,
                     gpu_count=policy.replication_factor,
                 )
