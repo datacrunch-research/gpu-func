@@ -14,6 +14,7 @@ from .artifacts import (
     ArtifactUploadProgress,
     scratch_path,
 )
+from .cuda_kernel import CUDAConfig, CUDAKernel
 from .errors import (
     ArtifactTreeUploadError,
     CudaCompilationError,
@@ -25,8 +26,22 @@ from .image import Image
 from .kernel import Kernel, KernelBenchmark, benchmark
 from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
+from .triton_policy import (
+    TritonBenchmark as BenchmarkSettings,
+)
+from .triton_policy import (
+    TritonPruning as Pruning,
+)
+from .triton_policy import (
+    TritonTuning as KernelTuning,
+)
 
 __all__ = [
+    "CUDAKernel",
+    "CUDAConfig",
+    "KernelTuning",
+    "BenchmarkSettings",
+    "Pruning",
     "App",
     "Kernel",
     "KernelBenchmark",

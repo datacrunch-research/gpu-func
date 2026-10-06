@@ -15,6 +15,11 @@ MARKDOWN_LINK = re.compile(r"\[[^]]*]\(([^)]+)\)")
 def test_documented_public_sdk_surface_is_available() -> None:
     expected = {
         "App",
+        "CUDAKernel",
+        "CUDAConfig",
+        "KernelTuning",
+        "BenchmarkSettings",
+        "Pruning",
         "Kernel",
         "KernelBenchmark",
         "benchmark",
