@@ -517,4 +517,3 @@ The full example in `examples/cuda_kernel.py` exercises aliasing, strided
 reset/restore, matrix multiplication, rejected compilation and rejected accuracy.
 Replication requires enough free GPUs on one worker. A poisoned CUDA process
 still fails its Call; durable restart/checkpoint recovery remains follow-up work.
-
