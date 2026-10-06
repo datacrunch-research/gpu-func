@@ -336,8 +336,7 @@ def quick_benchmark(
     import torch  # type: ignore[import-not-found]
     import triton  # type: ignore[import-not-found]
     from triton.backends.compiler import GPUTarget  # type: ignore[import-not-found]
-
-    from gfaas.triton_compat import ast_source_type
+    from triton.compiler import ASTSource  # type: ignore[import-not-found]
 
     if probe_target() != target or triton.__version__ != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
@@ -366,7 +365,6 @@ def quick_benchmark(
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
         signature = inspect.signature(jit.fn)
-        ASTSource = ast_source_type(jit)
         modern = "constexprs" in inspect.signature(ASTSource).parameters
 
         def fresh_inputs() -> tuple[Any, Any]:
@@ -706,8 +704,7 @@ def benchmark_cycle(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
-
-    from gfaas.triton_compat import ast_source_type
+    from triton.compiler import ASTSource  # type: ignore[import-not-found]
 
     if probe_target(torch.cuda.current_device()) != target or triton.__version__ != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
@@ -767,7 +764,6 @@ def benchmark_cycle(
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
         signature = inspect.signature(jit.fn)
-        ASTSource = ast_source_type(jit)
         modern = "constexprs" in inspect.signature(ASTSource).parameters
         entries = []
         for variant in variants_list:
@@ -983,8 +979,8 @@ def execute_winner(
     import torch
     import triton
     from triton.backends.compiler import GPUTarget
+    from triton.compiler import ASTSource  # type: ignore[import-not-found]
 
-    from gfaas.triton_compat import ast_source_type
     from gfaas.triton_inputs import SnapshotInputs, snapshot_inputs
 
     if probe_target() != target or triton.__version__ != triton_version:
@@ -1006,7 +1002,6 @@ def execute_winner(
         sys.modules[name] = module
         spec.loader.exec_module(module)
         jit = getattr(module, kernel_name)
-        ASTSource = ast_source_type(jit)
         kinds, constants = variant["signature"], variant["constants"]
         if "constexprs" in inspect.signature(ASTSource).parameters:
             ast = ASTSource(jit, kinds, constexprs=constants)

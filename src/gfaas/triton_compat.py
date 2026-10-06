@@ -7,7 +7,6 @@ uses conservative types: runtime values/alignment are not promoted to constants.
 from __future__ import annotations
 
 import ast
-import importlib
 import inspect
 import types
 from typing import Any
@@ -17,40 +16,13 @@ class UnsupportedTritonKernelError(ValueError):
     """The kernel uses an unsupported wrapper, hook, or argument form."""
 
 
-def _types(frontend: str = "triton") -> tuple[Any, Any]:
+def _types() -> tuple[Any, Any]:
     try:
         from triton.runtime.autotuner import Autotuner  # type: ignore[import-not-found]
         from triton.runtime.jit import JITFunction  # type: ignore[import-not-found]
     except ImportError as error:
         raise UnsupportedTritonKernelError("Install Triton in the client environment") from error
-    if frontend == "gluon":
-        try:
-            from triton.experimental.gluon import GluonJITFunction  # type: ignore[import-not-found]
-        except ImportError as error:
-            raise UnsupportedTritonKernelError("Installed Triton does not provide Gluon") from error
-        return GluonJITFunction, Autotuner
-    if frontend != "triton":
-        raise ValueError("Unknown kernel frontend")
     return JITFunction, Autotuner
-
-
-def ast_source_type(kernel: Any) -> Any:
-    """Select the frontend's AST source, probing public API before a legacy adapter."""
-    if callable(getattr(kernel, "is_gluon", None)) and kernel.is_gluon():
-        from triton.experimental import gluon  # type: ignore[import-not-found]
-
-        public = getattr(gluon, "GluonASTSource", None)
-        if public is not None:
-            return public
-        # Triton 3.8 and earlier expose this only in the runtime module.
-        GluonASTSource = importlib.import_module(
-            "triton.experimental.gluon._runtime"
-        ).GluonASTSource
-
-        return GluonASTSource
-    from triton.compiler import ASTSource  # type: ignore[import-not-found]
-
-    return ASTSource
 
 
 def reset_arguments(kernel: Any) -> tuple[list[str], list[str]]:
@@ -77,17 +49,13 @@ def reset_arguments(kernel: Any) -> tuple[list[str], list[str]]:
     return result[0], result[1]
 
 
-def validate_kernel(
-    kernel: Any, frontend: str = "triton"
-) -> tuple[Any, list[dict[str, Any]] | None]:
+def validate_kernel(kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
     """Accept exact JIT/vanilla autotuner classes; reject custom subclasses."""
-    jit_type, auto_type = _types(frontend)
+    jit_type, auto_type = _types()
     configurations = None
     if type(kernel) is auto_type:
         if type(kernel.fn) is not jit_type:
-            raise UnsupportedTritonKernelError(
-                f"Only autotune directly wrapping {frontend}.jit is supported"
-            )
+            raise UnsupportedTritonKernelError("Only autotune directly wrapping jit is supported")
         # Instantiate the installed release's vanilla wrapper to compare defaults.
         # This runs Triton's constructor, never the user's callbacks or benchmark.
         reset, restore = reset_arguments(kernel)
@@ -174,9 +142,7 @@ def validate_kernel(
             raise UnsupportedTritonKernelError("No configurations supplied")
         kernel = kernel.fn
     if type(kernel) is not jit_type:
-        raise UnsupportedTritonKernelError(
-            f"Only plain {frontend}.jit or vanilla autotune({frontend}.jit) is supported"
-        )
+        raise UnsupportedTritonKernelError("Only plain jit or vanilla autotune(jit) is supported")
     for field in ("pre_run_hooks", "launch_metadata"):
         if getattr(kernel, field, None):
             raise UnsupportedTritonKernelError(f"JIT callback is unsupported: {field}")
@@ -196,18 +162,16 @@ def validate_kernel(
     return kernel, configurations
 
 
-def source_bundle(kernel: Any, frontend: str = "triton") -> str:
+def source_bundle(kernel: Any) -> str:
     """Emit just kernel/dependency definitions; do not import the user's module remotely."""
-    jit_type, _ = _types(frontend)
+    jit_type, _ = _types()
     imports: dict[str, str] = {"triton": "import triton"}
-    if frontend == "gluon":
-        imports["vfunc_gluon"] = "from triton.experimental import gluon as vfunc_gluon"
     constants: dict[str, str] = {}
     functions: dict[str, str] = {}
     visiting: set[str] = set()
 
     def visit(jit: Any, name: str) -> None:
-        validate_kernel(jit, frontend)
+        validate_kernel(jit)
         if name in functions or name in visiting:
             return
         visiting.add(name)
@@ -238,9 +202,7 @@ def source_bundle(kernel: Any, frontend: str = "triton") -> str:
                 decorator_options[field] = value
         node.decorator_list = [
             ast.parse(
-                ("vfunc_gluon.jit(" if frontend == "gluon" else "triton.jit(")
-                + ",".join(f"{k}={v!r}" for k, v in decorator_options.items())
-                + ")",
+                "triton.jit(" + ",".join(f"{k}={v!r}" for k, v in decorator_options.items()) + ")",
                 mode="eval",
             ).body
         ]
@@ -260,15 +222,6 @@ def source_bundle(kernel: Any, frontend: str = "triton") -> str:
                         f"Unsupported source dependency: {referenced}"
                     )
                 imports[referenced] = f"import {value.__name__} as {referenced}"
-            elif (
-                frontend == "gluon"
-                and getattr(value, "__module__", "").startswith("triton.experimental.gluon")
-                and getattr(value, "__name__", "").isidentifier()
-            ):
-                # Preserve named Gluon layout constructors imported by the author.
-                imports[referenced] = (
-                    f"from {value.__module__} import {value.__name__} as {referenced}"
-                )
             elif value is None or type(value) in (bool, int, float, str, tuple):
                 constants[referenced] = f"{referenced} = {value!r}"
             else:

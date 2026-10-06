@@ -33,8 +33,7 @@ def compile_batch(
     cpu_started = os.times()
     import triton  # type: ignore[import-not-found]
     from triton.backends.compiler import GPUTarget  # type: ignore[import-not-found]
-
-    from gfaas.triton_compat import ast_source_type
+    from triton.compiler import ASTSource  # type: ignore[import-not-found]
 
     imports_finished = time.perf_counter()
     if isinstance(variants, str):
@@ -54,6 +53,13 @@ def compile_batch(
     if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
         triton.knobs.cache.dir = str(cache)
     gpu_target = GPUTarget(**target)
+    api = inspect.signature(ASTSource).parameters
+    if "constexprs" in api:
+        modern = True
+    elif "constants" in api:
+        modern = False
+    else:
+        raise RuntimeError("Unsupported ASTSource interface: missing constants parameter")
     with tempfile.TemporaryDirectory() as folder:
         path = Path(folder) / "compile_source.py"
         path.write_text(source)
@@ -65,14 +71,6 @@ def compile_batch(
         sys.modules[name] = module
         spec.loader.exec_module(module)
         kernel = getattr(module, kernel_name)
-        ASTSource = ast_source_type(kernel)
-        api = inspect.signature(ASTSource).parameters
-        if "constexprs" in api:
-            modern = True
-        elif "constants" in api:
-            modern = False
-        else:
-            raise RuntimeError("Unsupported ASTSource interface: missing constants parameter")
         loaded = time.perf_counter()
 
         def compile_one(variant: dict[str, Any]) -> dict[str, Any]:
