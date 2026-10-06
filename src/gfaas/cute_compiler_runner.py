@@ -7,6 +7,7 @@ import json
 import multiprocessing
 import os
 import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ def _compile_one(request: dict[str, Any]) -> dict[str, Any]:
             "id": request["variant"]["id"],
             "status": "failed",
             "diagnostics": f"{type(error).__name__}: {error}",
+            "traceback": traceback.format_exc(limit=-8)[-16_384:],
         }
     row["wall_seconds"] = time.perf_counter() - start
     return row
