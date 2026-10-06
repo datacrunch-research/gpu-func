@@ -158,11 +158,12 @@ def bound_candidate(
 def l2_flush_buffer(torch: Any) -> Any:
     cuda = ctypes.CDLL("libcuda.so.1")
     size = ctypes.c_int()
-    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE. The job exposes one device.
-    status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, torch.cuda.current_device())
+    # CUDA's CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE for this replica's selected GPU.
+    device = torch.cuda.current_device()
+    status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, device)
     if status or size.value <= 0:
         raise RuntimeError("Cannot determine GPU L2 cache size")
-    return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
+    return torch.empty(2 * size.value, dtype=torch.uint8, device=f"cuda:{device}")
 
 
 def measure_quick(
@@ -614,7 +615,11 @@ def final_benchmark(
     graph_fits = padded_sets <= getattr(ring, "max_sets", math.inf) and padded_sets * (
         getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0
     ) <= getattr(ring, "max_bytes", math.inf)
-    if z < settings.get("min_calls_per_graph", 10) or not graph_fits:
+    if (
+        z < settings.get("min_calls_per_graph", 10)
+        or not graph_fits
+        or not getattr(candidate, "supports_cuda_graph", True)
+    ):
         count = min(
             maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
         )
@@ -696,15 +701,25 @@ def benchmark_cycle(
     reset_arguments: list[str] | None = None,
     restore_arguments: list[str] | None = None,
     argument_names: list[str] | None = None,
-    prepared_cache: tuple[str, dict[str, dict[str, Any]]] | None = None,
+    backend: str = "triton",
+    prepared_cache: tuple[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     import cloudpickle
     import torch
-    import triton
-    from triton.backends.compiler import GPUTarget
-    from triton.compiler import ASTSource
 
-    if probe_target(torch.cuda.current_device()) != target or triton.__version__ != triton_version:
+    if backend not in ("triton", "cute"):
+        raise ValueError("Unknown kernel compiler backend")
+    if backend == "triton":
+        import triton
+        from triton.backends.compiler import GPUTarget
+        from triton.compiler import ASTSource
+
+        library_version = triton.__version__
+    else:
+        from gfaas import cute_backend
+
+        library_version = cute_backend.version()
+    if probe_target(torch.cuda.current_device()) != target or library_version != triton_version:
         raise RuntimeError("Benchmark GPU target or Triton version differs from compilation")
     torch.cuda.init()
     gpu_uuid = str(
@@ -744,56 +759,78 @@ def benchmark_cycle(
     with context as folder:
         cache = Path(folder) / "cache"
         cache.mkdir(exist_ok=True)
-        prepared = (
-            prepared_cache[1]
-            if prepared_cache
-            else restore_caches(artifacts, cache, source, target, triton_version)
-        )
-        os.environ["TRITON_CACHE_DIR"] = str(cache)
-        if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
-            triton.knobs.cache.dir = str(cache)
-        path = Path(folder) / "compile_source.py"
-        path.write_text(source)
-        name = "vfunc_compile_" + hashlib.sha256(source.encode()).hexdigest()[:16]
-        spec = importlib.util.spec_from_file_location(name, path)
-        assert spec is not None and spec.loader is not None
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-        jit = getattr(module, kernel_name)
-        signature = inspect.signature(jit.fn)
-        modern = "constexprs" in inspect.signature(ASTSource).parameters
+        prepared: Any
+        if prepared_cache:
+            prepared = prepared_cache[1]
+        elif backend == "cute":
+            prepared = cute_backend.load_artifacts(
+                artifacts, source, target, triton_version, variants_list
+            )
+        else:
+            prepared = restore_caches(artifacts, cache, source, target, triton_version)
+        if backend == "triton":
+            os.environ["TRITON_CACHE_DIR"] = str(cache)
+            if hasattr(triton, "knobs") and hasattr(triton.knobs, "cache"):
+                triton.knobs.cache.dir = str(cache)
+            path = Path(folder) / "compile_source.py"
+            path.write_text(source)
+            name = "vfunc_compile_" + hashlib.sha256(source.encode()).hexdigest()[:16]
+            spec = importlib.util.spec_from_file_location(name, path)
+            assert spec is not None and spec.loader is not None
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            jit = getattr(module, kernel_name)
+            signature = inspect.signature(jit.fn)
+            modern = "constexprs" in inspect.signature(ASTSource).parameters
         entries = []
         for variant in variants_list:
             row = {"id": variant["id"]}
             rows.append(row)
-            if prepared.get(row["id"], {}).get("status") != "compiled":
+            if (
+                row["id"] not in prepared
+                if backend == "cute"
+                else prepared.get(row["id"], {}).get("status") != "compiled"
+            ):
                 row["status"] = "compile_failed"
                 continue
-            kinds, constants = variant["signature"], variant["constants"]
-            ast = (
-                ASTSource(jit, kinds, constexprs=constants)
-                if modern
-                else ASTSource(
-                    jit,
-                    {jit.arg_names.index(n): k for n, k in kinds.items() if k != "constexpr"},
-                    constants={jit.arg_names.index(n): v for n, v in constants.items()},
+            if backend == "cute":
+                candidate = cute_backend.candidate(
+                    prepared[row["id"]], variant, argument_names or []
                 )
-            )
+                row["prepared_files_unchanged"] = True
+            else:
+                kinds, constants = variant["signature"], variant["constants"]
+                ast = (
+                    ASTSource(jit, kinds, constexprs=constants)
+                    if modern
+                    else ASTSource(
+                        jit,
+                        {jit.arg_names.index(n): k for n, k in kinds.items() if k != "constexpr"},
+                        constants={jit.arg_names.index(n): v for n, v in constants.items()},
+                    )
+                )
 
-            def snapshot() -> dict[str, Any]:
-                return {
-                    str(p): (p.stat().st_mtime_ns, p.stat().st_size)
-                    for p in cache.rglob("*")
-                    if p.is_file() and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
-                }
+                def snapshot() -> dict[str, Any]:
+                    return {
+                        str(p): (p.stat().st_mtime_ns, p.stat().st_size)
+                        for p in cache.rglob("*")
+                        if p.is_file()
+                        and p.suffix in {".cubin", ".ptx", ".llir", ".ttir", ".ttgir"}
+                    }
 
-            before = snapshot()
-            compiled = triton.compile(ast, target=GPUTarget(**target), options=variant["options"])
-            if before != snapshot() or compiled.hash != prepared[row["id"]]["cache_hash"]:
-                raise RuntimeError("GPU preparation recompiled or changed a CPU-prepared variant")
-            row["prepared_files_unchanged"] = True
-            candidate = bound_candidate(compiled, constants, variant["options"], signature, grid)
+                before = snapshot()
+                compiled = triton.compile(
+                    ast, target=GPUTarget(**target), options=variant["options"]
+                )
+                if before != snapshot() or compiled.hash != prepared[row["id"]]["cache_hash"]:
+                    raise RuntimeError(
+                        "GPU preparation recompiled or changed a CPU-prepared variant"
+                    )
+                row["prepared_files_unchanged"] = True
+                candidate = bound_candidate(
+                    compiled, constants, variant["options"], signature, grid
+                )
             args, kwargs = ring.next()
             reset(*args, **kwargs)
             candidate(*args, **kwargs)
@@ -919,7 +956,7 @@ def benchmark_cycle(
         valid = [r for r in rows if r["status"] == "measured"]
         best_row = min(valid, key=lambda r: r["runtime_us"]) if valid else None
         return {
-            "schema": "vfunc.triton-benchmark/v1",
+            "schema": f"vfunc.{backend}-benchmark/v1",
             "status": "passed" if valid else "failed",
             "gpu_uuid": gpu_uuid,
             "results": rows,
@@ -938,6 +975,9 @@ def benchmark_replicas(*, device_count: int, **kwargs: Any) -> dict[str, Any]:
 
     if torch.cuda.device_count() < device_count:
         raise RuntimeError("Replica Call did not receive its requested GPU count")
+    if "cute_version" in kwargs:
+        kwargs["backend"] = "cute"
+        kwargs["triton_version"] = kwargs.pop("cute_version")
     reports = []
     for device in range(device_count):
         with torch.cuda.device(device):
@@ -1020,18 +1060,34 @@ def benchmark_selected_replicas(*, device_count: int, **kwargs: Any) -> dict[str
 
     if torch.cuda.device_count() != device_count:
         raise RuntimeError("Benchmark Call did not receive its requested GPU count")
+    backend = kwargs.get("backend", "triton")
+    if "cute_version" in kwargs:
+        backend = kwargs["backend"] = "cute"
+        kwargs["triton_version"] = kwargs.pop("cute_version")
     selected = {v["id"] for v in json.loads(kwargs["variants"])}
     with tempfile.TemporaryDirectory(prefix="vfunc-selected-") as folder:
         cache = Path(folder) / "cache"
         cache.mkdir()
-        prepared = restore_caches(
-            kwargs["artifacts"],
-            cache,
-            kwargs["source"],
-            kwargs["target"],
-            kwargs["triton_version"],
-            selected,
-        )
+        prepared: Any
+        if backend == "cute":
+            from gfaas import cute_backend
+
+            prepared = cute_backend.load_artifacts(
+                kwargs["artifacts"],
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                json.loads(kwargs["variants"]),
+            )
+        else:
+            prepared = restore_caches(
+                kwargs["artifacts"],
+                cache,
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                selected,
+            )
         reports = []
         for device in range(device_count):
             with torch.cuda.device(device):

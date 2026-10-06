@@ -12,6 +12,27 @@ from gfaas import triton_quick_runner as runner
 from gfaas.triton_policy import portable_callable
 
 
+@pytest.mark.parametrize("device", [0, 2])
+def test_l2_flush_buffer_uses_the_replica_device(monkeypatch, device):
+    calls = []
+
+    def attribute(size, code, selected):
+        assert code == 38 and selected == device
+        size._obj.value = 4096
+        return 0
+
+    monkeypatch.setattr(
+        runner.ctypes, "CDLL", lambda _: SimpleNamespace(cuDeviceGetAttribute=attribute)
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(current_device=lambda: device),
+        uint8="uint8",
+        empty=lambda size, **kwargs: calls.append((size, kwargs)) or "flush",
+    )
+    assert runner.l2_flush_buffer(torch) == "flush"
+    assert calls == [(8192, {"dtype": "uint8", "device": f"cuda:{device}"})]
+
+
 @pytest.mark.parametrize(
     "options",
     [
