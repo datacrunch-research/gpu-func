@@ -39,6 +39,11 @@ TENSOR_DTYPES = (
     "float4_e2m1fn_x2",
 )
 
+
+class _LaunchRejected(RuntimeError):
+    """A launcher rejected this configuration or input specialization."""
+
+
 ABI_HEADER = r"""
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -296,7 +301,7 @@ def candidate(library: Path, argument_names: list[str]) -> Any:
                 raise TypeError("Unsupported CUTLASS launch argument")
         status = launch(native, len(native), torch.cuda.current_stream().cuda_stream)
         if status:
-            raise RuntimeError(f"CUTLASS launcher returned status {status}")
+            raise _LaunchRejected(f"CUTLASS launcher returned status {status}")
 
     return invoke
 
@@ -374,8 +379,15 @@ def benchmark_cycle(
             launch = candidate(Path(folder) / records[row["id"]]["library"], argument_names)
             args, kwargs = ring.next()
             factory.reset(*args, **kwargs)
-            launch(*args, **kwargs)
-            torch.cuda.synchronize()
+            try:
+                launch(*args, **kwargs)
+                torch.cuda.synchronize()
+            except _LaunchRejected as error:
+                # Confirm the context is healthy before skipping this variant.
+                # CUDA faults still escape and terminate this process.
+                torch.cuda.synchronize()
+                row.update(status="benchmark_failed", diagnostics=str(error))
+                continue
             entries.append((row, launch))
         return measure_candidates(
             entries, rows, ring, torch, flush, evaluate, policy, gpu_uuid, final_only, estimates

@@ -134,3 +134,88 @@ def test_wheel_nvcc_and_versioned_cudart_are_passed_to_linker(tmp_path, monkeypa
         "-Xlinker",
         str(runtime.parent),
     ]
+
+
+@pytest.mark.parametrize("poisoned", [False, True])
+def test_rejected_variant_preserves_valid_variants_and_propagates_cuda_faults(
+    tmp_path, monkeypatch, poisoned
+):
+    import sys
+
+    import cloudpickle
+
+    from gfaas import cutlass_runner, triton_inputs, triton_quick_runner
+
+    synchronized, measured = [], []
+
+    def synchronize():
+        synchronized.append(True)
+        if poisoned and len(synchronized) == 2:
+            raise RuntimeError("CUDA context poisoned")
+
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            current_device=lambda: 0,
+            get_device_properties=lambda _: SimpleNamespace(uuid="gpu-test"),
+            synchronize=synchronize,
+        )
+    )
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setattr(triton_quick_runner, "probe_target", lambda _: {"arch": 103})
+    monkeypatch.setattr(
+        triton_quick_runner, "l2_flush_buffer", lambda _: SimpleNamespace(numel=lambda: 2)
+    )
+    monkeypatch.setattr(
+        triton_inputs, "SnapshotInputs", lambda *a: SimpleNamespace(reset=lambda *a, **k: None)
+    )
+    monkeypatch.setattr(
+        triton_quick_runner, "InputRing", lambda *a: SimpleNamespace(next=lambda: ((), {}))
+    )
+
+    def launch(path, names):
+        if path.name == "bad.so":
+
+            def rejected():
+                raise cutlass_runner._LaunchRejected("CUTLASS launcher returned status -1")
+
+            return rejected
+        return lambda: None
+
+    def measure(entries, rows, *args):
+        measured.extend(row["id"] for row, _ in entries)
+        return {"results": rows}
+
+    monkeypatch.setattr(cutlass_runner, "candidate", launch)
+    monkeypatch.setattr(triton_quick_runner, "measure_candidates", measure)
+    request = dict(
+        source="source",
+        variants=json.dumps([{"id": "good"}, {"id": "bad"}]),
+        artifacts=[],
+        metadata={},
+        callbacks=cloudpickle.dumps((None, None)),
+        target={"arch": 103},
+        policy={"max_input_sets": 10, "max_ring_bytes": 100},
+        inputs={},
+        argument_names=["a"],
+        reset_arguments=[],
+        restore_arguments=[],
+        prepared_cache=(
+            str(tmp_path),
+            {
+                "good": {"status": "compiled", "library": "good.so"},
+                "bad": {"status": "compiled", "library": "bad.so"},
+            },
+        ),
+    )
+    if poisoned:
+        with pytest.raises(RuntimeError, match="context poisoned"):
+            cutlass_runner.benchmark_cycle(**request)
+        assert measured == []
+    else:
+        result = cutlass_runner.benchmark_cycle(**request)
+        assert measured == ["good"]
+        assert result["results"][1] == {
+            "id": "bad",
+            "status": "benchmark_failed",
+            "diagnostics": "CUTLASS launcher returned status -1",
+        }
