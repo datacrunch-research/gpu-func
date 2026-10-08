@@ -22,11 +22,15 @@ from .errors import (
     UnsupportedGpuPoolError,
 )
 from .image import Image
+from .kernel import Kernel, KernelBenchmark, benchmark
 from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
 
 __all__ = [
     "App",
+    "Kernel",
+    "KernelBenchmark",
+    "benchmark",
     "ArtifactRef",
     "scratch_path",
     "ArtifactOutput",
@@ -45,6 +49,16 @@ __all__ = [
     "Image",
     "RemoteResult",
     "StageArtifactBinding",
+    "TritonKernel",
+    "TritonTuning",
+    "TritonBenchmark",
+    "TritonPruning",
+    "TritonInputMetadata",
+    "TritonQuickBenchmarkError",
+    "TritonBenchmarkError",
+    "UnsupportedTritonKernelError",
+    "TritonCompilationError",
+    "TritonExecutionNotImplementedError",
     "TritonCandidate",
     "TritonCase",
     "UnsupportedGpuPoolError",
@@ -67,6 +81,28 @@ def __getattr__(name: str):
         from .cuda import CudaSource, compile_and_run
 
         return {"CudaSource": CudaSource, "compile_and_run": compile_and_run}[name]
+    if name in {
+        "TritonKernel",
+        "TritonQuickBenchmarkError",
+        "UnsupportedTritonKernelError",
+        "TritonCompilationError",
+        "TritonExecutionNotImplementedError",
+    }:
+        from . import triton_kernel
+
+        return getattr(triton_kernel, name)
+    if name == "TritonBenchmarkError":
+        from .triton_replication import TritonBenchmarkError
+
+        return TritonBenchmarkError
+    if name in {"TritonTuning", "TritonPruning", "TritonBenchmark"}:
+        from . import triton_policy
+
+        return getattr(triton_policy, name)
+    if name == "TritonInputMetadata":
+        from .triton_inputs import TritonInputMetadata
+
+        return TritonInputMetadata
     if name in {"TritonCandidate", "TritonCase", "spawn_triton_tuning", "tune_triton"}:
         from .triton_tuning import (
             TritonCandidate,
