@@ -1,4 +1,8 @@
-"""Remote harness for self-contained Python scripts submitted by the CLI."""
+"""Remote harness for self-contained Python scripts submitted by the CLI.
+
+The worker imports this file as the top-level module of the Call's bundle, not as part of the gfaas
+package, so it imports only the standard library.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +14,18 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .artifacts import scratch_path
+_SCRATCH_ROOT_ENV = "GFAAS_SCRATCH_ROOT"
+
+
+def _scratch_path() -> Path:
+    """Return the function's scratch directory, as ``gfaas.scratch_path`` does."""
+    root = os.environ.get(_SCRATCH_ROOT_ENV)
+    if not root:
+        raise RuntimeError("Python script scratch directory is unavailable")
+    path = Path(root)
+    if path.is_symlink() or not path.is_dir():
+        raise FileNotFoundError("the function scratch directory is unavailable")
+    return path
 
 
 def run_script(
@@ -31,7 +46,7 @@ def run_script(
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="gfaas-python-", dir=scratch_path()) as directory:
+    with tempfile.TemporaryDirectory(prefix="gfaas-python-", dir=_scratch_path()) as directory:
         script = Path(directory) / safe_name
         script.write_text(source, encoding="utf-8")
         completed = subprocess.run(
