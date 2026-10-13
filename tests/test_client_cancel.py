@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import pickle
 from collections.abc import Callable
@@ -370,7 +372,12 @@ def test_submit_and_wait_map_python_convenience_onto_public_resources():
             return httpx.Response(
                 200,
                 content=encoded_result,
-                headers={"Content-Type": CLOUDPICKLE_MEDIA_TYPE},
+                headers={
+                    "Content-Type": CLOUDPICKLE_MEDIA_TYPE,
+                    "Content-Digest": "sha-256=:"
+                    + base64.b64encode(hashlib.sha256(encoded_result).digest()).decode()
+                    + ":",
+                },
             )
         raise AssertionError(f"unexpected request: {request.method} {path}")
 
@@ -481,7 +488,12 @@ def test_wait_decodes_explicit_python_pickle_result_media_type():
             return httpx.Response(
                 200,
                 content=encoded_result,
-                headers={"Content-Type": PICKLE_MEDIA_TYPE},
+                headers={
+                    "Content-Type": PICKLE_MEDIA_TYPE,
+                    "Content-Digest": "sha-256=:"
+                    + base64.b64encode(hashlib.sha256(encoded_result).digest()).decode()
+                    + ":",
+                },
             )
         raise AssertionError(f"unexpected request: {request.method} {request.url.path}")
 

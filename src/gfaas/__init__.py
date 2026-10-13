@@ -16,6 +16,7 @@ from .artifacts import (
 )
 from .errors import (
     ArtifactTreeUploadError,
+    ArtifactUploadError,
     CudaCompilationError,
     CudaError,
     CudaProcessError,
@@ -32,6 +33,7 @@ __all__ = [
     "ArtifactOutput",
     "ArtifactCheckpoint",
     "ArtifactTreeUploadError",
+    "ArtifactUploadError",
     "ArtifactUploadProgress",
     "Client",
     "call_status_summary",

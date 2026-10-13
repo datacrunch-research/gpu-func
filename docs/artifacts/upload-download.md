@@ -22,7 +22,9 @@ with Client() as client:
 assert downloaded == payload
 ```
 
-The byte methods are for small values. Use the file methods for large data:
+Byte uploads larger than 1 MiB use multipart requests automatically. This includes serialized
+function arguments. The byte methods still hold the supplied bytes in your process. Use the file
+methods for large data:
 
 ```python
 with Client() as client:
@@ -50,6 +52,25 @@ artifact = client.upload_artifact_file(
 ```
 
 Store `session["id"]` in durable application state. Supply it again after an interrupted transfer.
+
+An interrupted byte or file upload raises `ArtifactUploadError` with its `upload_id`. Supply that ID
+and the same content and metadata to resume the upload. The client reuses verified parts. A
+completed session returns its original Artifact, including after a lost completion response. An
+expired session requires a new upload.
+
+```python
+from gfaas import ArtifactUploadError
+
+try:
+    artifact = client.upload_artifact(payload, kind="input")
+except ArtifactUploadError as error:
+    # Save the ID if the application must resume after restart.
+    artifact = client.upload_artifact(payload, kind="input", upload_id=error.upload_id)
+```
+
+`wait_for_result()` streams the result to a private file, verifies its size and digest, and decodes
+from that file. The decoded Python object must still fit in client memory. The temporary file is
+removed after decoding or failure.
 
 Use a progress callback for a large file or directory:
 

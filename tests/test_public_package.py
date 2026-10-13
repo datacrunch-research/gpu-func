@@ -19,6 +19,7 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "ArtifactOutput",
         "ArtifactRef",
         "ArtifactTreeUploadError",
+        "ArtifactUploadError",
         "ArtifactUploadProgress",
         "Client",
         "ClientConfig",
