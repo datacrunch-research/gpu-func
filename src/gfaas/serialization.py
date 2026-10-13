@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pickle
-from typing import Any
+from typing import Any, BinaryIO
 
 import cloudpickle
 
@@ -39,6 +39,18 @@ def decode_result(payload: bytes, *, codec: str | None) -> Any:
     """Decode a result blob according to its declared codec."""
     try:
         return _codec(codec).loads(payload)
+    except SerializationError:
+        raise
+    except Exception as error:
+        raise SerializationError(
+            f"could not deserialize result blob with codec {codec!r}: {error}"
+        ) from error
+
+
+def decode_result_file(source: BinaryIO, *, codec: str | None) -> Any:
+    """Decode from a verified file without retaining a second copy of the serialized result."""
+    try:
+        return _codec(codec).load(source)
     except SerializationError:
         raise
     except Exception as error:

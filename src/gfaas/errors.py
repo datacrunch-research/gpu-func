@@ -22,6 +22,16 @@ class UnsupportedGpuPoolError(GfaasError):
         )
 
 
+class ArtifactUploadError(GfaasError):
+    """An interrupted transfer whose accepted parts can be reused with upload_id."""
+
+    def __init__(self, upload_id: str, detail: str) -> None:
+        self.upload_id = upload_id
+        super().__init__(
+            f"Artifact upload {upload_id} failed: {detail}. Resume with upload_id={upload_id!r}"
+        )
+
+
 class ArtifactTreeUploadError(GfaasError):
     """Tree registration failed after its child blobs were uploaded."""
 

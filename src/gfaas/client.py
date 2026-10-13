@@ -14,9 +14,10 @@ import os
 import re
 import shutil
 import stat
+import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Self
@@ -32,10 +33,18 @@ from .artifacts import (
 )
 from .bundle import empty_bundle, package_single_file
 from .config import ClientConfig
-from .errors import ArtifactTreeUploadError, GfaasError, UnsupportedGpuPoolError
+from .errors import (
+    ArtifactTreeUploadError,
+    ArtifactUploadError,
+    GfaasError,
+    UnsupportedGpuPoolError,
+)
 from .image import Image
-from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result, encode_args
+from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
+
+MAXIMUM_INLINE_ARTIFACT_BYTES = 1024 * 1024
+MAXIMUM_UPLOAD_PART_BYTES = 64 * 1024 * 1024
 
 TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
 MAX_ERROR_JOURNEY_EVENTS = 40
@@ -176,7 +185,25 @@ class Client:
         kind: str = "other",
         media_type: str = "application/octet-stream",
         filename: str | None = None,
+        upload_id: str | None = None,
     ) -> dict[str, Any]:
+        if len(data) > MAXIMUM_INLINE_ARTIFACT_BYTES or upload_id is not None:
+            expected = {
+                "kind": kind,
+                "media_type": media_type,
+                "filename": filename,
+                "digest": _content_digest(data),
+                "size_bytes": len(data),
+            }
+            session = self._artifact_upload_session(expected, upload_id)
+            part_size = _upload_part_size(session)
+            # Only copy one bounded part; do not duplicate the serialized argument blob.
+            view = memoryview(data)
+            chunks = (
+                bytes(view[offset : offset + part_size])
+                for offset in range(0, len(data), part_size)
+            )
+            return self._upload_artifact_parts(session, chunks, len(data))
         digest = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
         headers = {
             "Content-Type": media_type,
@@ -214,34 +241,70 @@ class Client:
             "digest": digest,
             "size_bytes": size_bytes,
         }
-        if upload_id is None:
-            session = self.create_artifact_file_upload(
-                source,
-                kind=kind,
-                media_type=media_type,
-                filename=expected["filename"],
-            )
-        else:
-            session = self._request(
-                "GET",
-                f"/v1/artifact-uploads/{upload_id}",
-                operation="Artifact upload session lookup",
-            ).json()
-            for field, value in expected.items():
-                if session.get(field) != value:
-                    raise GfaasError(f"Artifact upload session {upload_id} does not match {field}")
-        session_id = str(session["id"])
-        part_size = int(session["part_size_bytes"])
-        uploaded = {int(part["part_number"]): part for part in session.get("parts", [])}
-        completed_bytes = 0
-        transferred_bytes = 0
-        reused_bytes = 0
+        session = self._artifact_upload_session(expected, upload_id)
+        part_size = _upload_part_size(session)
+
+        def report(completed: int, transferred: int, reused: int) -> None:
+            if progress is not None:
+                progress(
+                    ArtifactUploadProgress(
+                        path=source,
+                        completed_bytes=completed,
+                        total_bytes=size_bytes,
+                        transferred_bytes=transferred,
+                        reused_bytes=reused,
+                        completed_files=int(completed == size_bytes),
+                    )
+                )
+
         with source.open("rb") as stream:
-            part_number = 0
-            while True:
-                chunk = stream.read(part_size)
-                if not chunk:
-                    break
+            return self._upload_artifact_parts(
+                session,
+                iter(lambda: stream.read(part_size), b""),
+                size_bytes,
+                report,
+            )
+
+    def _artifact_upload_session(
+        self,
+        expected: dict[str, Any],
+        upload_id: str | None,
+    ) -> dict[str, Any]:
+        if upload_id is None:
+            return self._request(
+                "POST",
+                "/v1/artifact-uploads",
+                operation="Artifact upload session creation",
+                json=expected,
+            ).json()
+        session = self._request(
+            "GET",
+            f"/v1/artifact-uploads/{upload_id}",
+            operation="Artifact upload session lookup",
+        ).json()
+        for field, value in expected.items():
+            if session.get(field) != value:
+                raise GfaasError(f"Artifact upload session {upload_id} does not match {field}")
+        return session
+
+    def _upload_artifact_parts(
+        self,
+        session: dict[str, Any],
+        chunks: Iterable[bytes],
+        size_bytes: int,
+        progress: Callable[[int, int, int], None] | None = None,
+    ) -> dict[str, Any]:
+        session_id = str(session["id"])
+        part_size = _upload_part_size(session)
+        if session.get("artifact_id"):
+            return self.get_artifact(str(session["artifact_id"]))
+        uploaded = {int(part["part_number"]): part for part in session.get("parts", [])}
+        completed_bytes = transferred_bytes = reused_bytes = 0
+        try:
+            for part_number, chunk in enumerate(chunks):
+                expected_size = min(part_size, size_bytes - completed_bytes)
+                if len(chunk) != expected_size or expected_size <= 0:
+                    raise GfaasError("Artifact source changed size during upload")
                 chunk_digest = _content_digest(chunk)
                 existing = uploaded.get(part_number)
                 if existing is None:
@@ -267,33 +330,18 @@ class Client:
                     reused_bytes += len(chunk)
                 completed_bytes += len(chunk)
                 if progress is not None:
-                    progress(
-                        ArtifactUploadProgress(
-                            path=source,
-                            completed_bytes=completed_bytes,
-                            total_bytes=size_bytes,
-                            transferred_bytes=transferred_bytes,
-                            reused_bytes=reused_bytes,
-                            completed_files=int(completed_bytes == size_bytes),
-                        )
-                    )
-                part_number += 1
-        artifact = self._request(
-            "POST",
-            f"/v1/artifact-uploads/{session_id}/completion",
-            operation="Artifact upload completion",
-        ).json()
+                    progress(completed_bytes, transferred_bytes, reused_bytes)
+            if completed_bytes != size_bytes:
+                raise GfaasError("Artifact source changed size during upload")
+            artifact = self._request(
+                "POST",
+                f"/v1/artifact-uploads/{session_id}/completion",
+                operation="Artifact upload completion",
+            ).json()
+        except (GfaasError, httpx.HTTPError) as error:
+            raise ArtifactUploadError(session_id, str(error)) from error
         if progress is not None and size_bytes == 0:
-            progress(
-                ArtifactUploadProgress(
-                    path=source,
-                    completed_bytes=0,
-                    total_bytes=0,
-                    transferred_bytes=0,
-                    reused_bytes=0,
-                    completed_files=1,
-                )
-            )
+            progress(0, 0, 0)
         return artifact
 
     def create_artifact_file_upload(
@@ -509,7 +557,9 @@ class Client:
                 expected_digest = response.headers["Content-Digest"]
                 media_type = response.headers.get("Content-Type", "application/octet-stream")
                 with temporary.open("xb") as output:
-                    for chunk in response.iter_bytes():
+                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
+                        if written + len(chunk) > expected_size:
+                            raise GfaasError("Artifact download exceeds its declared size")
                         output.write(chunk)
                         hasher.update(chunk)
                         written += len(chunk)
@@ -921,20 +971,32 @@ class Client:
                     return None
                 if output.get("storage") == "inline":
                     return output.get("value")
-                payload, media_type = self.download_artifact(output["artifact_id"])
-                declared_type = output.get("media_type") or media_type
-                if declared_type == "application/json":
-                    return json.loads(payload)
-                if declared_type == CLOUDPICKLE_MEDIA_TYPE:
-                    codec = CLOUDPICKLE_CODEC
-                elif declared_type in {PICKLE_MEDIA_TYPE, "application/octet-stream"}:
-                    codec = PICKLE_CODEC
-                else:
-                    codec = declared_type
-                return decode_result(payload, codec=codec)
+                with tempfile.TemporaryDirectory(prefix="vfunc-result-") as directory:
+                    path, media_type = self.download_artifact_file(
+                        output["artifact_id"],
+                        Path(directory) / "result",
+                    )
+                    declared_type = output.get("media_type") or media_type
+                    with path.open("rb") as source:
+                        if declared_type == "application/json":
+                            return json.load(source)
+                        if declared_type == CLOUDPICKLE_MEDIA_TYPE:
+                            codec = CLOUDPICKLE_CODEC
+                        elif declared_type in {PICKLE_MEDIA_TYPE, "application/octet-stream"}:
+                            codec = PICKLE_CODEC
+                        else:
+                            codec = declared_type
+                        return decode_result_file(source, codec=codec)
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"call {call_id} not finished within {timeout_s}s")
             time.sleep(self.cfg.poll_interval_s)
+
+
+def _upload_part_size(session: dict[str, Any]) -> int:
+    size = int(session["part_size_bytes"])
+    if not 0 < size <= MAXIMUM_UPLOAD_PART_BYTES:
+        raise GfaasError("Artifact upload part size must be between 1 byte and 64 MiB")
+    return size
 
 
 def _problem_body(response: httpx.Response) -> dict[str, Any] | None:
