@@ -50,21 +50,22 @@ configured Artifact size limit.
 
 ## Decorator options
 
-| Option                    | Meaning                                                                         |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `image`                   | Image for this function. The `App` image is the default.                        |
-| `gpu_count`               | Number of GPUs that one worker must lease. Use 0 for a CPU-only Call.           |
-| `gpu`                     | Older GPU request syntax. Do not combine it with `gpu_count`.                   |
-| `gpu_type`                | GPU pool, such as `gb300`. The default is the literal `any` pool.               |
-| `timeout`                 | Active execution deadline in seconds. Default 300.                              |
-| `capacity_wait`           | Maximum pre-assignment time. This time includes image and Artifact preparation. |
-| `cpu_millicores`          | Requested CPU time. A value of 1000 equals one CPU.                             |
-| `memory_bytes`            | Aggregate memory limit for the function and its helper processes.               |
-| `ephemeral_storage_bytes` | Requested capacity for the disk-backed scratch directory.                       |
-| `shared_memory_bytes`     | Size of the `/dev/shm` tmpfs. Its pages also count against `memory_bytes`.      |
-| `max_log_bytes`           | Combined retained standard output and standard error.                           |
-| `max_output_bytes`        | Combined bytes for declared output Artifacts.                                   |
-| `env`                     | Environment variables for the function.                                         |
+| Option                    | Meaning                                                                                               |
+| ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `compatibility`           | CPU architecture and exact GPU compute capabilities. See [hardware requirements](images/hardware.md). |
+| `image`                   | Image for this function. The `App` image is the default.                                              |
+| `gpu_count`               | Number of GPUs that one worker must lease. Use 0 for a CPU-only Call.                                 |
+| `gpu`                     | Older GPU request syntax. Do not combine it with `gpu_count`.                                         |
+| `gpu_type`                | GPU pool, such as `gb300`. Use `any` to allow placement across pools.                                 |
+| `timeout`                 | Active execution deadline in seconds. Default 300.                                                    |
+| `capacity_wait`           | Maximum pre-assignment time. This time includes image and Artifact preparation.                       |
+| `cpu_millicores`          | Requested CPU time. A value of 1000 equals one CPU.                                                   |
+| `memory_bytes`            | Aggregate memory limit for the function and its helper processes.                                     |
+| `ephemeral_storage_bytes` | Requested capacity for the disk-backed scratch directory.                                             |
+| `shared_memory_bytes`     | Size of the `/dev/shm` tmpfs. Its pages also count against `memory_bytes`.                            |
+| `max_log_bytes`           | Combined retained standard output and standard error.                                                 |
+| `max_output_bytes`        | Combined bytes for declared output Artifacts.                                                         |
+| `env`                     | Environment variables for the function.                                                               |
 
 The `env` values become part of the durable Environment definition. The coordinator stores these
 values. Do not put secrets in this mapping.
@@ -74,8 +75,8 @@ function. The worker reserves its requested capacity and checks logical file siz
 This check is not a filesystem quota. A short write can exceed the limit before the next check. The
 worker then fails the Call and removes the scratch directory.
 
-`gpu_type="any"` is not a wildcard across all pools. Ask the operator for a pool name. A CPU-only
-request also uses the `any` pool, so that pool needs an available worker.
+`gpu_type="any"` permits coordinator placement across pools. The deployment must enable `any` in its
+configured pool list. A named pool restricts both CPU and GPU stages to that pool.
 
 The capacity wait and execution timeout measure different stages. A Call uses `capacity_wait` before
 worker acceptance. This period includes image preparation and Artifact staging. The function

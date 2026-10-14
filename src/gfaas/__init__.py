@@ -14,6 +14,7 @@ from .artifacts import (
     ArtifactUploadProgress,
     scratch_path,
 )
+from .compatibility import Compatibility
 from .errors import (
     ArtifactTreeUploadError,
     ArtifactUploadError,
@@ -38,6 +39,7 @@ __all__ = [
     "Client",
     "call_status_summary",
     "ClientConfig",
+    "Compatibility",
     "CallStage",
     "CudaCompilationError",
     "CudaError",

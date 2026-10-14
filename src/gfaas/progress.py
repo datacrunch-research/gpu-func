@@ -13,6 +13,11 @@ def call_status_summary(call: dict[str, Any]) -> str:
     """
     state = str(call.get("state", "unknown"))
     parts = [f"state={state}"]
+    compatibility = call.get("compatibility")
+    if state in {"queued", "running"} and isinstance(compatibility, dict):
+        parts.append(f"compatibility={compatibility.get('state', 'unknown')}")
+        if compatibility.get("message"):
+            parts.append(str(compatibility["message"]))
     preparation = call.get("preparation")
     if state not in {"queued", "running"} or not isinstance(preparation, dict):
         return " ".join(parts)

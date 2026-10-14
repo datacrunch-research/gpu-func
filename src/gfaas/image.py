@@ -1,9 +1,7 @@
 """Image reference for gfaas.
 
-There are two image description modes:
-
-1. A registered image uses a logical name that the gfaas service provides.
-2. A container image uses a portable build description.
+An image can name one registered filesystem, select native registered variants,
+or describe a container build. Registered variants use CPU architecture keys.
 """
 
 from __future__ import annotations
@@ -12,6 +10,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 
@@ -48,6 +47,29 @@ class Image:
     name: str
     build_spec: dict[str, Any] | None = None
     remote_source: dict[str, Any] | None = None
+    registry_variants: Mapping[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.registry_variants is None:
+            return
+        if self.build_spec is not None or self.remote_source is not None:
+            raise ValueError(
+                "registry variants cannot be combined with a build or remote descriptor"
+            )
+        variants = dict(self.registry_variants)
+        if not variants or any(arch not in {"amd64", "arm64"} for arch in variants):
+            raise ValueError("registry variants must map amd64 and/or arm64 to image references")
+        if any(
+            not isinstance(ref, str) or not ref or len(ref.encode()) > 255
+            for ref in variants.values()
+        ):
+            raise ValueError("image references must contain 1 to 255 UTF-8 bytes")
+        object.__setattr__(self, "registry_variants", MappingProxyType(variants))
+
+    @classmethod
+    def from_registry_variants(cls, name: str, images: Mapping[str, str]) -> Image:
+        """Select a native registered name or digest for each supported CPU architecture."""
+        return cls(name=name, registry_variants=images)
 
     @classmethod
     def from_registry(cls, name: str) -> Image:

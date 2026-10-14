@@ -10,6 +10,7 @@
 - [Images](images/index.md)
   - [Prepared images](images/prepared.md)
   - [Remote images](images/remote.md)
+  - [Hardware requirements and native images](images/hardware.md)
   - [Qualify a published image](images/qualification.md)
 - [Artifacts](artifacts/index.md)
   - [Upload and download](artifacts/upload-download.md)
