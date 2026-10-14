@@ -36,16 +36,27 @@ LOGIN_TIMEOUT_S = 600.0
 HttpFactory = Callable[[str], httpx.Client]
 
 
+def _add_connection_options(parser: argparse.ArgumentParser) -> None:
+    """Accept the global --api-base and --profile after the command name too."""
+    parser.add_argument("--api-base", default=argparse.SUPPRESS, help="service API base URL")
+    parser.add_argument("--profile", default=argparse.SUPPRESS, help="stored login profile")
+
+
 def add_commands(commands: Any) -> None:
     login = commands.add_parser("login", help="sign in through the browser and store an API key")
+    _add_connection_options(login)
     login.add_argument(
         "--no-browser",
         action="store_true",
         help="approve a short code from any browser instead of opening one here",
     )
     login.add_argument("--label", help="name for this key (default: vfunc CLI on HOST)")
-    commands.add_parser("whoami", help="show who the configured API key belongs to")
-    commands.add_parser("logout", help="revoke the stored API key and forget it")
+    _add_connection_options(
+        commands.add_parser("whoami", help="show who the configured API key belongs to")
+    )
+    _add_connection_options(
+        commands.add_parser("logout", help="revoke the stored API key and forget it")
+    )
 
 
 def dispatch(args: argparse.Namespace, *, http_factory: HttpFactory | None = None) -> int:

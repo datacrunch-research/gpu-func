@@ -130,7 +130,7 @@ def test_browser_login_exchanges_the_callback_code(
         assert challenge == opened["code_challenge"]
         return httpx.Response(200, json=MINTED)
 
-    assert run(["--api-base", API, "--profile", "gb300dev", "login"], server) == 0
+    assert run(["login", "--api-base", API, "--profile", "gb300dev"], server) == 0
 
     assert opened["url"].startswith(f"{API}/v1/auth/browser/login?")
     assert opened["code_challenge_method"] == "S256"
@@ -252,3 +252,16 @@ def test_logout_refuses_an_environment_key(store: Path, monkeypatch: pytest.Monk
     with pytest.raises(CliError, match="GFAAS_API_KEY is set"):
         run(["logout"], lambda request: pytest.fail("contacted the service"))
     assert "gb300dev" in credentials.load(store).profiles
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--api-base", API, "--profile", "gb300dev", "whoami"],
+        ["whoami", "--api-base", API, "--profile", "gb300dev"],
+    ],
+)
+def test_connection_options_work_before_or_after_the_command(argv: list[str]) -> None:
+    args = build_parser().parse_args(argv)
+
+    assert (args.api_base, args.profile) == (API, "gb300dev")
