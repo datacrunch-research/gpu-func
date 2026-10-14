@@ -6,7 +6,7 @@ import argparse
 import os
 import re
 
-from . import general
+from . import auth, general
 
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
 # top-level `vfunc <mode>` that auto-detects the exercise from the cwd.
@@ -133,12 +133,18 @@ def build_parser() -> argparse.ArgumentParser:
         description="Run GPU workloads and manage durable Calls and Artifacts.",
     )
     parser.add_argument("--api-base", default=os.environ.get("GFAAS_API_BASE"))
+    parser.add_argument(
+        "--profile",
+        default=os.environ.get("VFUNC_PROFILE"),
+        help="stored `vfunc login` profile to use (default: the last login)",
+    )
     parser.add_argument("--request-timeout", type=_positive_float)
     parser.add_argument("--poll-interval", type=_nonnegative_float)
 
     sub = parser.add_subparsers(dest="command_name", required=True)
 
     general.add_commands(sub)
+    auth.add_commands(sub)
 
     sub.add_parser("workers", aliases=["pools"], help="List configured gfaas GPU pools")
 

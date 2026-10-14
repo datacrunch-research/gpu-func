@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import tempfile
@@ -10,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Self
 
-from gfaas import ArtifactRef, Client, ClientConfig, RemoteResult
+from gfaas import ArtifactRef, Client, ClientConfig, RemoteResult, credentials
 from gfaas.errors import GfaasError
 
 from .errors import CliError
@@ -22,10 +23,19 @@ _TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
 
 
 def client_config_from_args(args: argparse.Namespace) -> ClientConfig:
-    """Build one SDK configuration from environment and global CLI options."""
-    defaults = ClientConfig.from_env()
+    """Build one SDK configuration from environment and global CLI options.
+
+    --api-base and --profile select the stored login like GFAAS_API_BASE and VFUNC_PROFILE, so a
+    stored key is never sent to another API base.
+    """
+    environment = dict(os.environ)
+    if args.api_base:
+        environment["GFAAS_API_BASE"] = args.api_base
+    if getattr(args, "profile", None):
+        environment[credentials.PROFILE_VARIABLE] = args.profile
+    defaults = ClientConfig.from_env(environment)
     return ClientConfig(
-        api_base=args.api_base or defaults.api_base,
+        api_base=defaults.api_base,
         api_key=defaults.api_key,
         poll_interval_s=(
             args.poll_interval if args.poll_interval is not None else defaults.poll_interval_s

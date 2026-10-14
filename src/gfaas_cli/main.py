@@ -14,7 +14,7 @@ import httpx
 from gfaas import Client
 from gfaas.errors import GfaasError
 
-from . import general
+from . import auth, general
 from .client import GfaasClient, sdk_client_from_args
 from .commands import _cmd_custom, _cmd_exercise, _cmd_exercise_mode, _cmd_workers
 from .constants import RC_SETUP
@@ -57,6 +57,9 @@ def _main(
     args = parser.parse_args(command_line)
     if program_args and not general.accepts_program_args(args):
         parser.error("program arguments after -- require the run command")
+
+    if args.command_name in auth.AUTH_COMMANDS:
+        return auth.dispatch(args)
 
     if args.command_name in general.GENERAL_COMMANDS:
         factory = client_factory or (lambda: sdk_client_from_args(args))
