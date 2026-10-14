@@ -33,9 +33,17 @@ class ArtifactUploadError(GfaasError):
 
 
 class ArtifactTreeUploadError(GfaasError):
-    """Tree registration failed after its child blobs were uploaded."""
+    """A child upload or tree registration failed; completed children remain available."""
 
-    def __init__(self, child_artifact_ids: list[str]) -> None:
+    def __init__(
+        self,
+        child_artifact_ids: list[str],
+        *,
+        upload_ids: dict[str, str] | None = None,
+        failures: dict[str, str] | None = None,
+    ) -> None:
+        self.upload_ids = dict(upload_ids or {})
+        self.failures = dict(failures or {})
         self.child_artifact_ids = tuple(child_artifact_ids)
         super().__init__(
             "Artifact tree creation failed after "

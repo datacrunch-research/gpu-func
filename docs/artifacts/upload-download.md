@@ -72,6 +72,42 @@ except ArtifactUploadError as error:
 from that file. The decoded Python object must still fit in client memory. The temporary file is
 removed after decoding or failure.
 
+## Upload concurrency
+
+The client uploads file parts and directory children concurrently. The default limit is four.
+
+Set `GFAAS_UPLOAD_CONCURRENCY` to an integer from 1 to 16. Use 1 for serial transfers. The CLI uses
+the same environment variable. To set the limit in Python:
+
+```python
+from dataclasses import replace
+from gfaas import Client, ClientConfig
+
+config = replace(ClientConfig.from_env(), upload_concurrency=4)
+with Client(config) as client:
+    artifact = client.upload_artifact_file("dataset.bin")
+```
+
+One `Client` shares this limit across its automatic uploads. With a limit of N:
+
+- At most N upload requests can run at once, including session creation and completion.
+- At most N file or byte multipart uploads can hold active transfer slots.
+- At most N source files remain open for upload or hashing.
+- Active part buffers use at most N times the negotiated part size. The client accepts part sizes up
+  to 64 MiB.
+- File hashing can use another 2N MiB. Caller-owned byte inputs, HTTP overhead, and tree metadata
+  are separate.
+
+Workers acquire a request slot before they read a part. Waiting parts do not hold payload buffers.
+Separate `Client` instances have separate limits.
+
+The service still enforces its session and unfinished-byte quotas. The client reports quota
+rejection and stops the failed operation. It does not automatically retry rejected requests or
+create replacement sessions. Existing requests finish before the method returns an error. A
+directory failure also waits for active child uploads.
+
+## Progress and cancellation
+
 Use a progress callback for a large file or directory:
 
 ```python
@@ -96,11 +132,34 @@ with gfaas.Client() as client:
     )
 ```
 
-The client calls the callback after each completed part. A resumed upload reports completed parts as
-`reused_bytes`. A new transfer reports its completed bytes as `transferred_bytes`.
+The client calls the callback after each completed part and after file publication. Parts can finish
+in any order. `completed_files` increases only after publication succeeds. A resumed upload reports
+accepted parts as `reused_bytes`. New parts contribute to `transferred_bytes`. A completed session
+reports all its bytes as reused.
 
 For a directory upload, the byte and file counts cover the complete directory. The `path` field
-identifies the current file.
+identifies the file that produced the update. Directory callbacks are serialized but can use
+different threads. Keep callbacks short and avoid callback exceptions. Do not start another upload
+on the same client from a callback.
+
+To emit machine-readable progress:
+
+```python
+import json
+from dataclasses import asdict
+
+
+def json_progress(item):
+    print(json.dumps({**asdict(item), "path": str(item.path)}), flush=True)
+```
+
+Supply a `threading.Event` as `cancel` to a byte, file, or directory upload. Set the event from
+another thread to stop new parts and prevent completion. Requests already in progress finish or
+reach their HTTP timeout. Cancellation cannot undo a completion request that already reached the
+service.
+
+A cancelled multipart transfer raises `ArtifactUploadError` with its session ID. A directory failure
+raises `ArtifactTreeUploadError`. Clear the event before resuming an interrupted file.
 
 The file download writes to a temporary path first. It verifies the size and digest before it
 renames the file to the requested path.
@@ -124,8 +183,15 @@ those blobs. This structure permits file-level deduplication across trees.
 The upload response includes `child_artifact_ids` for cleanup bookkeeping. Deleting the tree does
 not delete these blob Artifacts. A blob can belong to another tree or another application resource.
 
-If final tree creation fails, `ArtifactTreeUploadError.child_artifact_ids` contains the completed
-child uploads. Your application can retain them for a retry or remove them.
+If a child upload or final tree creation fails, `ArtifactTreeUploadError.child_artifact_ids`
+contains the completed child uploads. This list includes children that finish while another child
+fails. `upload_ids` maps failed relative file paths to their resumable session IDs. `failures` maps
+failed relative file paths to error descriptions. Your application can resume these files
+individually or remove completed child Artifacts. The directory method does not automatically resume
+an entire tree.
+
+The client registers the tree only after all children succeed. It sorts manifest entries by path, so
+concurrent completion does not change tree identity.
 
 The directory download verifies the manifest and every file. It builds a temporary read-only tree
 and then renames that tree to the requested destination.
@@ -144,7 +210,8 @@ bytes again, the original metadata remains.
 | `kind`       | One of `source`, `build_context`, `input`, `output`, `log`, `profile`, `diagnostic`, or `other` |
 | `media_type` | MIME type of the bytes                                                                          |
 | `filename`   | Optional file name                                                                              |
-| `progress`   | Callback that receives `ArtifactUploadProgress` after each completed part                       |
+| `progress`   | File or directory callback that receives `ArtifactUploadProgress` after parts and publication   |
+| `cancel`     | Optional `threading.Event` that stops new transfer work                                         |
 
 The deployment keeps finite limits for inline bytes, part size, open sessions, unfinished bytes, and
 session lifetime. It does not apply the inline byte limit to the completed file Artifact.

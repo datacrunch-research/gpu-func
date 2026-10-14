@@ -100,7 +100,7 @@ def test_large_bytes_and_files_resume_after_part_and_completion_failures(
             upload(interrupted.value.upload_id)
         result = upload(interrupted.value.upload_id)
         assert result["id"] == "art_large"
-        assert requests == list(range(9)), "accepted parts were transferred again"
+        assert sorted(requests) == list(range(9)), "accepted parts were transferred again"
 
 
 def test_wait_streams_large_result_and_checks_integrity(

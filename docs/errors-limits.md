@@ -5,7 +5,7 @@
 | Exception                 | When it occurs                                              |
 | ------------------------- | ----------------------------------------------------------- |
 | `GfaasError`              | An API request fails, or a Call ends in a non-success state |
-| `ArtifactTreeUploadError` | Tree creation fails after one or more child uploads         |
+| `ArtifactTreeUploadError` | A child upload or final tree creation fails                 |
 | `CudaCompilationError`    | A single-stage CUDA helper returns a compile error report   |
 | `CudaProcessError`        | The compiled program or profiler exits unsuccessfully       |
 | `SerializationError`      | The SDK cannot serialize the arguments or result            |
@@ -70,20 +70,20 @@ name that the operator provides.
 
 Limits are deployment-specific. Ask your operator for the current values.
 
-| Limit                 | Scope                                                       |
-| --------------------- | ----------------------------------------------------------- |
-| Inline Artifact bytes | Small single-request uploads and serialized values          |
-| Upload session bytes  | Unfinished bytes reserved by one principal                  |
-| Log retention         | Combined stdout and stderr per Call                         |
-| Capacity wait         | Time before worker acceptance, including input preparation  |
-| Execution timeout     | One active wall-clock deadline per run                      |
-| CPU and memory        | Per-Call request, bounded by the selected worker policy     |
-| Disk scratch          | Per-Call reservation and periodic logical-size check        |
-| Shared memory         | Per-Call `/dev/shm` size. Pages also count as memory.       |
-| Declared outputs      | File bytes across terminal outputs and checkpoint versions  |
-| Artifact references   | 32 unique Artifacts per Call                                |
-| Tree entries          | Deployment-specific maximum number of entries                |
-| Tree path length      | Deployment-specific maximum UTF-8 path length                |
+| Limit                 | Scope                                                      |
+| --------------------- | ---------------------------------------------------------- |
+| Inline Artifact bytes | Small single-request uploads and serialized values         |
+| Upload session bytes  | Unfinished bytes reserved by one principal                 |
+| Log retention         | Combined stdout and stderr per Call                        |
+| Capacity wait         | Time before worker acceptance, including input preparation |
+| Execution timeout     | One active wall-clock deadline per run                     |
+| CPU and memory        | Per-Call request, bounded by the selected worker policy    |
+| Disk scratch          | Per-Call reservation and periodic logical-size check       |
+| Shared memory         | Per-Call `/dev/shm` size. Pages also count as memory.      |
+| Declared outputs      | File bytes across terminal outputs and checkpoint versions |
+| Artifact references   | 32 unique Artifacts per Call                               |
+| Tree entries          | Deployment-specific maximum number of entries              |
+| Tree path length      | Deployment-specific maximum UTF-8 path length              |
 
 The `wait()` deadline is a client-side limit. The function `capacity_wait` limits all time before
 worker acceptance. This time includes image preparation and Artifact staging. The function `timeout`
