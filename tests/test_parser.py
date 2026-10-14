@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from gfaas_cli.client import client_config_from_args
 from gfaas_cli.parser import build_parser
@@ -34,11 +35,13 @@ class ParserTests(unittest.TestCase):
             ]
         )
 
-        config = client_config_from_args(args)
+        with patch.dict("os.environ", {"GFAAS_UPLOAD_CONCURRENCY": "2"}):
+            config = client_config_from_args(args)
 
         self.assertEqual(config.api_base, "https://gpu.example.com/api")
         self.assertEqual(config.request_timeout_s, 12)
         self.assertEqual(config.poll_interval_s, 0.25)
+        self.assertEqual(config.upload_concurrency, 2)
 
     def test_custom_parser_defaults_and_repeatable_args(self):
         args = build_parser().parse_args(

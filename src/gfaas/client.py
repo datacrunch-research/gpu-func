@@ -17,9 +17,10 @@ import stat
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from threading import BoundedSemaphore, Event, Lock
 from typing import Any, Self
 
 import httpx
@@ -42,6 +43,7 @@ from .errors import (
 from .image import Image
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
+from .uploads import check_cancelled, run_uploads
 
 MAXIMUM_INLINE_ARTIFACT_BYTES = 1024 * 1024
 MAXIMUM_UPLOAD_PART_BYTES = 64 * 1024 * 1024
@@ -118,6 +120,8 @@ class Client:
 
     def __init__(self, config: ClientConfig | None = None) -> None:
         self.cfg = config or ClientConfig.from_env()
+        self._upload_slots = BoundedSemaphore(self.cfg.upload_concurrency)
+        self._upload_files = BoundedSemaphore(self.cfg.upload_concurrency)
         headers = {"X-API-Key": self.cfg.api_key} if self.cfg.api_key else {}
         self._http = httpx.Client(
             base_url=self.cfg.api_base,
@@ -168,6 +172,14 @@ class Client:
         suffix = f": {detail}" if detail else ""
         raise GfaasError(f"{operation} failed: {response.status_code}{suffix}")
 
+    def _upload_request(
+        self, method: str, path: str, *, cancel: Event | None = None, **kwargs: Any
+    ) -> httpx.Response:
+        # Metadata, completion, and inline uploads share the same request budget as parts.
+        with self._upload_slots:
+            check_cancelled(cancel)
+            return self._request(method, path, **kwargs)
+
     # --- public resources -------------------------------------------------
 
     def get_capabilities(self) -> dict[str, Any]:
@@ -186,7 +198,9 @@ class Client:
         media_type: str = "application/octet-stream",
         filename: str | None = None,
         upload_id: str | None = None,
+        cancel: Event | None = None,
     ) -> dict[str, Any]:
+        check_cancelled(cancel)
         if len(data) > MAXIMUM_INLINE_ARTIFACT_BYTES or upload_id is not None:
             expected = {
                 "kind": kind,
@@ -195,15 +209,16 @@ class Client:
                 "digest": _content_digest(data),
                 "size_bytes": len(data),
             }
-            session = self._artifact_upload_session(expected, upload_id)
-            part_size = _upload_part_size(session)
-            # Only copy one bounded part; do not duplicate the serialized argument blob.
-            view = memoryview(data)
-            chunks = (
-                bytes(view[offset : offset + part_size])
-                for offset in range(0, len(data), part_size)
-            )
-            return self._upload_artifact_parts(session, chunks, len(data))
+            with self._upload_files:
+                check_cancelled(cancel)
+                session = self._artifact_upload_session(expected, upload_id)
+                view = memoryview(data)
+                return self._upload_artifact_parts(
+                    session,
+                    lambda offset, length: bytes(view[offset : offset + length]),
+                    len(data),
+                    cancel=cancel,
+                )
         digest = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
         headers = {
             "Content-Type": media_type,
@@ -212,10 +227,11 @@ class Client:
         }
         if filename is not None:
             headers["X-Gfunc-Filename"] = filename
-        response = self._request(
+        response = self._upload_request(
             "POST",
             "/v1/artifacts",
             operation="artifact upload",
+            cancel=cancel,
             content=data,
             headers=headers,
         )
@@ -230,6 +246,31 @@ class Client:
         filename: str | None = None,
         upload_id: str | None = None,
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
+        cancel: Event | None = None,
+    ) -> dict[str, Any]:
+        """Upload a file with resumable, bounded-memory transfer requests."""
+        with self._upload_files:
+            check_cancelled(cancel)
+            return self._upload_artifact_file(
+                path,
+                kind=kind,
+                media_type=media_type,
+                filename=filename,
+                upload_id=upload_id,
+                progress=progress,
+                cancel=cancel,
+            )
+
+    def _upload_artifact_file(
+        self,
+        path: Path | str,
+        *,
+        kind: str = "other",
+        media_type: str = "application/octet-stream",
+        filename: str | None = None,
+        upload_id: str | None = None,
+        progress: Callable[[ArtifactUploadProgress], None] | None = None,
+        cancel: Event | None = None,
     ) -> dict[str, Any]:
         """Upload a file with resumable, bounded-memory transfer requests."""
         source = Path(path)
@@ -242,9 +283,15 @@ class Client:
             "size_bytes": size_bytes,
         }
         session = self._artifact_upload_session(expected, upload_id)
-        part_size = _upload_part_size(session)
+        _upload_part_size(session)
 
-        def report(completed: int, transferred: int, reused: int) -> None:
+        last_progress = (0, 0, 0)
+
+        def report(
+            completed: int, transferred: int, reused: int, *, published: bool = False
+        ) -> None:
+            nonlocal last_progress
+            last_progress = completed, transferred, reused
             if progress is not None:
                 progress(
                     ArtifactUploadProgress(
@@ -253,17 +300,24 @@ class Client:
                         total_bytes=size_bytes,
                         transferred_bytes=transferred,
                         reused_bytes=reused,
-                        completed_files=int(completed == size_bytes),
+                        completed_files=int(published),
                     )
                 )
 
         with source.open("rb") as stream:
-            return self._upload_artifact_parts(
-                session,
-                iter(lambda: stream.read(part_size), b""),
-                size_bytes,
-                report,
-            )
+            read_lock = Lock()
+
+            def read_part(offset: int, length: int) -> bytes:
+                with read_lock:
+                    stream.seek(offset)
+                    chunk = stream.read(length)
+                    if os.fstat(stream.fileno()).st_size != size_bytes:
+                        raise GfaasError("Artifact source changed size during upload")
+                    return chunk
+
+            artifact = self._upload_artifact_parts(session, read_part, size_bytes, report, cancel)
+        report(*last_progress, published=True)
+        return artifact
 
     def _artifact_upload_session(
         self,
@@ -271,13 +325,13 @@ class Client:
         upload_id: str | None,
     ) -> dict[str, Any]:
         if upload_id is None:
-            return self._request(
+            return self._upload_request(
                 "POST",
                 "/v1/artifact-uploads",
                 operation="Artifact upload session creation",
                 json=expected,
             ).json()
-        session = self._request(
+        session = self._upload_request(
             "GET",
             f"/v1/artifact-uploads/{upload_id}",
             operation="Artifact upload session lookup",
@@ -290,56 +344,92 @@ class Client:
     def _upload_artifact_parts(
         self,
         session: dict[str, Any],
-        chunks: Iterable[bytes],
+        read_part: Callable[[int, int], bytes],
         size_bytes: int,
         progress: Callable[[int, int, int], None] | None = None,
+        cancel: Event | None = None,
     ) -> dict[str, Any]:
         session_id = str(session["id"])
         part_size = _upload_part_size(session)
-        if session.get("artifact_id"):
-            return self.get_artifact(str(session["artifact_id"]))
         uploaded = {int(part["part_number"]): part for part in session.get("parts", [])}
         completed_bytes = transferred_bytes = reused_bytes = 0
+        stopped = Event()
+        transfer_errors: list[BaseException] = []
+
+        def transfer(part_number: int) -> tuple[int, bool]:
+            # Acquire before reading: waiting workers hold no part buffers.
+            with self._upload_slots:
+                check_cancelled(cancel)
+                check_cancelled(stopped)
+                try:
+                    offset = part_number * part_size
+                    expected_size = min(part_size, size_bytes - offset)
+                    chunk = read_part(offset, expected_size)
+                    if len(chunk) != expected_size:
+                        raise GfaasError("Artifact source changed size during upload")
+                    chunk_digest = _content_digest(chunk)
+                    existing = uploaded.get(part_number)
+                    if existing is None:
+                        self._request(
+                            "PUT",
+                            f"/v1/artifact-uploads/{session_id}/parts/{part_number}",
+                            operation="Artifact upload part transfer",
+                            content=chunk,
+                            headers={
+                                "Content-Type": "application/octet-stream",
+                                "Content-Digest": chunk_digest,
+                            },
+                        )
+                    elif (
+                        int(existing.get("size_bytes", -1)) != len(chunk)
+                        or existing.get("digest") != chunk_digest
+                    ):
+                        raise GfaasError(
+                            f"Artifact upload session {session_id} has a conflicting part {part_number}"
+                        )
+                    return len(chunk), existing is not None
+                except BaseException as error:
+                    transfer_errors.append(error)
+                    stopped.set()
+                    raise
+                finally:
+                    # Exceptions retain frames. Do not retain part buffers in an error traceback.
+                    chunk = b""
+
+        def completed(result: tuple[int, bool]) -> None:
+            nonlocal completed_bytes, transferred_bytes, reused_bytes
+            size, reused = result
+            completed_bytes += size
+            reused_bytes += size if reused else 0
+            transferred_bytes += 0 if reused else size
+            if progress is not None:
+                progress(completed_bytes, transferred_bytes, reused_bytes)
+
         try:
-            for part_number, chunk in enumerate(chunks):
-                expected_size = min(part_size, size_bytes - completed_bytes)
-                if len(chunk) != expected_size or expected_size <= 0:
-                    raise GfaasError("Artifact source changed size during upload")
-                chunk_digest = _content_digest(chunk)
-                existing = uploaded.get(part_number)
-                if existing is None:
-                    self._request(
-                        "PUT",
-                        f"/v1/artifact-uploads/{session_id}/parts/{part_number}",
-                        operation="Artifact upload part transfer",
-                        content=chunk,
-                        headers={
-                            "Content-Type": "application/octet-stream",
-                            "Content-Digest": chunk_digest,
-                        },
-                    )
-                    transferred_bytes += len(chunk)
-                elif (
-                    int(existing.get("size_bytes", -1)) != len(chunk)
-                    or existing.get("digest") != chunk_digest
-                ):
-                    raise GfaasError(
-                        f"Artifact upload session {session_id} has a conflicting part {part_number}"
-                    )
-                else:
-                    reused_bytes += len(chunk)
-                completed_bytes += len(chunk)
+            check_cancelled(cancel)
+            if session.get("artifact_id"):
+                artifact = self._upload_request(
+                    "GET", f"/v1/artifacts/{session['artifact_id']}", operation="artifact lookup"
+                ).json()
                 if progress is not None:
-                    progress(completed_bytes, transferred_bytes, reused_bytes)
-            if completed_bytes != size_bytes:
-                raise GfaasError("Artifact source changed size during upload")
-            artifact = self._request(
+                    progress(size_bytes, 0, size_bytes)
+                return artifact
+            run_uploads(
+                range((size_bytes + part_size - 1) // part_size),
+                transfer,
+                completed,
+                self.cfg.upload_concurrency,
+            )
+            check_cancelled(cancel)
+            artifact = self._upload_request(
                 "POST",
                 f"/v1/artifact-uploads/{session_id}/completion",
                 operation="Artifact upload completion",
+                cancel=cancel,
             ).json()
-        except (GfaasError, httpx.HTTPError) as error:
-            raise ArtifactUploadError(session_id, str(error)) from error
+        except (GfaasError, httpx.HTTPError, OSError) as error:
+            cause = transfer_errors[0] if transfer_errors else error
+            raise ArtifactUploadError(session_id, str(cause)) from cause
         if progress is not None and size_bytes == 0:
             progress(0, 0, 0)
         return artifact
@@ -353,20 +443,21 @@ class Client:
         filename: str | None = None,
     ) -> dict[str, Any]:
         """Create a durable upload session before a resumable file transfer."""
-        source = Path(path)
-        size_bytes, digest = _file_identity(source)
-        return self._request(
-            "POST",
-            "/v1/artifact-uploads",
-            operation="Artifact upload session creation",
-            json={
-                "kind": kind,
-                "media_type": media_type,
-                "filename": filename if filename is not None else source.name,
-                "digest": digest,
-                "size_bytes": size_bytes,
-            },
-        ).json()
+        with self._upload_files:
+            source = Path(path)
+            size_bytes, digest = _file_identity(source)
+            return self._upload_request(
+                "POST",
+                "/v1/artifact-uploads",
+                operation="Artifact upload session creation",
+                json={
+                    "kind": kind,
+                    "media_type": media_type,
+                    "filename": filename if filename is not None else source.name,
+                    "digest": digest,
+                    "size_bytes": size_bytes,
+                },
+            ).json()
 
     def upload_artifact_directory(
         self,
@@ -375,6 +466,7 @@ class Client:
         kind: str = "input",
         filename: str | None = None,
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
+        cancel: Event | None = None,
     ) -> dict[str, Any]:
         """Upload a directory as one immutable tree Artifact."""
         source = Path(path)
@@ -414,58 +506,84 @@ class Client:
         file_entries = [entry for entry in local_entries if entry[1] == "file"]
         total_bytes = sum(entry[3].st_size for entry in file_entries)
         total_files = len(file_entries)
-        completed_bytes = 0
-        transferred_bytes = 0
-        reused_bytes = 0
-        completed_files = 0
-        entries: list[dict[str, Any]] = []
-        for relative, entry_type, child, child_metadata in local_entries:
-            if entry_type == "directory":
-                entries.append({"path": relative, "type": "directory"})
-            else:
-                file_progress: ArtifactUploadProgress | None = None
+        progress_lock = Lock()
+        file_progress: dict[Path, ArtifactUploadProgress] = {}
+        totals = [0, 0, 0, 0]
+        uploaded_files: dict[str, dict[str, Any]] = {}
+        failed_uploads: dict[str, str] = {}
+        failures: dict[str, str] = {}
+        stopped = Event()
 
-                def report_file(
-                    item: ArtifactUploadProgress,
-                    *,
-                    current_path: Path = child,
-                    prior_completed_bytes: int = completed_bytes,
-                    prior_transferred_bytes: int = transferred_bytes,
-                    prior_reused_bytes: int = reused_bytes,
-                    prior_completed_files: int = completed_files,
-                ) -> None:
-                    nonlocal file_progress
-                    file_progress = item
-                    if progress is None:
-                        return
-                    progress(
-                        ArtifactUploadProgress(
-                            path=current_path,
-                            completed_bytes=prior_completed_bytes + item.completed_bytes,
-                            total_bytes=total_bytes,
-                            transferred_bytes=prior_transferred_bytes + item.transferred_bytes,
-                            reused_bytes=prior_reused_bytes + item.reused_bytes,
-                            completed_files=prior_completed_files + item.completed_files,
-                            total_files=total_files,
+        def upload_file(entry: tuple[str, str, Path, os.stat_result]) -> tuple[str, dict[str, Any]]:
+            relative, _, child, _ = entry
+            check_cancelled(cancel)
+            check_cancelled(stopped)
+
+            def report_file(item: ArtifactUploadProgress) -> None:
+                # Callbacks for a directory are serialized, including aggregate counter updates.
+                with progress_lock:
+                    previous = file_progress.get(child)
+                    for index, field in enumerate(
+                        ("completed_bytes", "transferred_bytes", "reused_bytes", "completed_files")
+                    ):
+                        totals[index] += getattr(item, field) - (
+                            getattr(previous, field) if previous else 0
                         )
-                    )
+                    file_progress[child] = item
+                    if progress is not None:
+                        progress(
+                            ArtifactUploadProgress(
+                                path=child,
+                                completed_bytes=totals[0],
+                                total_bytes=total_bytes,
+                                transferred_bytes=totals[1],
+                                reused_bytes=totals[2],
+                                completed_files=totals[3],
+                                total_files=total_files,
+                            )
+                        )
 
-                uploaded = self.upload_artifact_file(
+            try:
+                artifact = self.upload_artifact_file(
                     child,
                     kind=kind,
                     filename=child.name,
                     progress=report_file if progress is not None else None,
+                    cancel=cancel,
                 )
-                completed_bytes += child_metadata.st_size
-                completed_files += 1
-                if file_progress is not None:
-                    transferred_bytes += file_progress.transferred_bytes
-                    reused_bytes += file_progress.reused_bytes
+                return relative, artifact
+            except Exception as error:
+                stopped.set()
+                with progress_lock:
+                    failures[relative] = str(error)
+                    if isinstance(error, ArtifactUploadError):
+                        failed_uploads[relative] = error.upload_id
+                raise
+
+        def file_completed(result: tuple[str, dict[str, Any]]) -> None:
+            relative, artifact = result
+            uploaded_files[relative] = artifact
+
+        try:
+            check_cancelled(cancel)
+            run_uploads(file_entries, upload_file, file_completed, self.cfg.upload_concurrency)
+            check_cancelled(cancel)
+        except Exception as error:
+            raise ArtifactTreeUploadError(
+                list(dict.fromkeys(uploaded_files[path]["id"] for path in sorted(uploaded_files))),
+                upload_ids=failed_uploads,
+                failures=failures,
+            ) from error
+        entries: list[dict[str, Any]] = []
+        for relative, entry_type, _, child_metadata in local_entries:
+            if entry_type == "directory":
+                entries.append({"path": relative, "type": "directory"})
+            else:
                 entries.append(
                     {
                         "path": relative,
                         "type": "file",
-                        "artifact_id": uploaded["id"],
+                        "artifact_id": uploaded_files[relative]["id"],
                         "executable": bool(child_metadata.st_mode & 0o111),
                     }
                 )
@@ -473,10 +591,11 @@ class Client:
             dict.fromkeys(entry["artifact_id"] for entry in entries if entry["type"] == "file")
         )
         try:
-            tree = self._request(
+            tree = self._upload_request(
                 "POST",
                 "/v1/artifact-trees",
                 operation="Artifact tree creation",
+                cancel=cancel,
                 json={
                     "kind": kind,
                     "filename": filename if filename is not None else source.name,

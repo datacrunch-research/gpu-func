@@ -12,6 +12,11 @@ class ClientConfig:
     api_key: str | None
     poll_interval_s: float
     request_timeout_s: float
+    upload_concurrency: int = 4
+
+    def __post_init__(self) -> None:
+        if type(self.upload_concurrency) is not int or not 1 <= self.upload_concurrency <= 16:
+            raise ValueError("upload_concurrency must be an integer from 1 to 16")
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> ClientConfig:
@@ -21,4 +26,5 @@ class ClientConfig:
             api_key=env.get("GFAAS_API_KEY") or None,
             poll_interval_s=float(env.get("GFAAS_POLL_INTERVAL", "0.5")),
             request_timeout_s=float(env.get("GFAAS_REQUEST_TIMEOUT", "60")),
+            upload_concurrency=int(env.get("GFAAS_UPLOAD_CONCURRENCY", "4")),
         )

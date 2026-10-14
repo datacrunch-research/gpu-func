@@ -1,0 +1,180 @@
+{
+  "schema": "gfaas.upload-comparison/v1",
+  "date": "2026-10-14",
+  "baseline_revision": "00867f263545ed4c89d241c49f433812c06ce14b",
+  "service_revision": "74e9bcc8d4020e1cf694724390c49e582919a8c2",
+  "client_platform": "ARM64 Linux",
+  "python": "3.12.12",
+  "measured_sdk_sources": {
+    "src/gfaas/__init__.py": "7dcbccf160b8a22cad78c9091216464b52792e08d0613714125f8be4c50296e3",
+    "src/gfaas/app.py": "4efb035b3f7149b4de5d574bad4a8974bdbd86012f96fec359c287e4c0db3a99",
+    "src/gfaas/artifacts.py": "438d2bd9c98d45ed899a933a3fe02b3682a7e0a16ee117d8dec9ab54a084a78f",
+    "src/gfaas/bundle.py": "9647d26e9337a0be3c3e2acfe2ed3b273e4a5e938ba79d32b5cfe943dee65c54",
+    "src/gfaas/client.py": "11648bcae1753dd3522e37ece53ad0acec5b0ee0492934df2e272fe4b85c76d3",
+    "src/gfaas/config.py": "5243c9eeda12e670b97cb1d77c9d34e828b80f6f6977e8816293ec009509c619",
+    "src/gfaas/cuda.py": "6bb18b8131e914463d9c65f0d4745119977515503a400d89e32e8a26685c1945",
+    "src/gfaas/cuda_runner.py": "fdee88b5371c272db46dcd8fe47e3bf28232957a37498d4ca30dcfd87fd26634",
+    "src/gfaas/errors.py": "3348a8d699b06a65a7a531eee4dac46a2bfc928c1b8f27cf8134b7ce9675f104",
+    "src/gfaas/image.py": "67b2c5561c28091c1bb502050b15b207edc86b149384850322f5db338e11b5c0",
+    "src/gfaas/local_cuda.py": "6e0f7d14e48aadabc7779f08899e70c0bb4edddecb401713748a7a291f7044d4",
+    "src/gfaas/progress.py": "f1a72fefc0205ec803d729004793157f846fb5e93ca4e7d403544f883d23126d",
+    "src/gfaas/python_runner.py": "c35d5853170a16af083aae4b301bc6198cc09a2fc22de7f65e17c44f06fb9cc5",
+    "src/gfaas/serialization.py": "e18944e85d5e2d97e07737d3f4a58536c1a8e2458482452b0fd1e98be9a84a03",
+    "src/gfaas/stages.py": "e8f517df0dc61b7dfe7473ddd65a5618bc33e7aceda0b75e171ec99400236e54",
+    "src/gfaas/triton_tuning.py": "f6a44e0ba833e86b44686b75ee80e63ca593349ac8f02555d6d99c1b6aed67c9",
+    "src/gfaas/triton_tuning_runner.py": "379ed7891901385f672198bed39bce96ccbca7ec154dc2cd124d3d381aa91bab",
+    "src/gfaas/uploads.py": "b2e2d8361bef936cd2ee696b3011fbe45fe638ce2744112997f52c21b522f5fe"
+  },
+  "post_measurement_changes": [
+    "Check cancellation after acquiring a request slot.",
+    "Apply the file limit to explicit upload-session preparation.",
+    "Deduplicate completed child IDs in tree failure reports."
+  ],
+  "samples": [
+    {
+      "pair": 0,
+      "variant": "baseline",
+      "kind": "file",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 12.001810368848965,
+      "mib_per_second": 5.332528846324201,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 0,
+      "variant": "baseline",
+      "kind": "tree",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 33.83527986006811,
+      "mib_per_second": 1.891516791487569,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 0,
+      "variant": "candidate",
+      "kind": "file",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 7.949620203115046,
+      "mib_per_second": 8.050699073010016,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 0,
+      "variant": "candidate",
+      "kind": "tree",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 17.155235584126785,
+      "mib_per_second": 3.7306395290320142,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 1,
+      "variant": "candidate",
+      "kind": "file",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 7.541420785011724,
+      "mib_per_second": 8.486464530290828,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 1,
+      "variant": "candidate",
+      "kind": "tree",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 15.394519228022546,
+      "mib_per_second": 4.1573237235951614,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 1,
+      "variant": "baseline",
+      "kind": "file",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 15.637535219080746,
+      "mib_per_second": 4.092716601648827,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 1,
+      "variant": "baseline",
+      "kind": "tree",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 49.85387912904844,
+      "mib_per_second": 1.2837516582076562,
+      "cleanup": "recovered; 11 remaining children deleted",
+      "initial_cleanup": "failed: connection closed during DELETE"
+    },
+    {
+      "pair": 2,
+      "variant": "baseline",
+      "kind": "file",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 10.656222714111209,
+      "mib_per_second": 6.005880481012261,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 2,
+      "variant": "baseline",
+      "kind": "tree",
+      "concurrency": 1,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 33.76073974603787,
+      "mib_per_second": 1.8956930589031593,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 2,
+      "variant": "candidate",
+      "kind": "file",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 1,
+      "seconds": 4.646763690980151,
+      "mib_per_second": 13.77302661726281,
+      "cleanup": "passed"
+    },
+    {
+      "pair": 2,
+      "variant": "candidate",
+      "kind": "tree",
+      "concurrency": 4,
+      "size_bytes": 67108864,
+      "files": 32,
+      "seconds": 14.587445971090347,
+      "mib_per_second": 4.387334158895006,
+      "cleanup": "passed"
+    }
+  ],
+  "medians": {
+    "file": {
+      "serial_seconds": 12.001810368848965,
+      "concurrent_seconds": 7.541420785011724,
+      "speedup": 1.591452156164272
+    },
+    "tree": {
+      "serial_seconds": 33.83527986006811,
+      "concurrent_seconds": 15.394519228022546,
+      "speedup": 2.1978783071366053
+    }
+  }
+}
