@@ -65,7 +65,18 @@ class InstalledWheelTests(unittest.TestCase):
     def test_public_sdk_exports_and_console_entrypoint(self) -> None:
         import gfaas
 
-        for name in ("App", "Client", "ArtifactRef", "ArtifactOutput", "ArtifactCheckpoint"):
+        for name in (
+            "App",
+            "Client",
+            "ArtifactRef",
+            "ArtifactOutput",
+            "ArtifactCheckpoint",
+            "TritonKernel",
+            "TritonTuning",
+            "TritonQuickBenchmarkError",
+            "TritonCompilationError",
+            "TritonExecutionNotImplementedError",
+        ):
             self.assertIsNotNone(getattr(gfaas, name))
         entrypoints = {
             entry.name: entry.value
