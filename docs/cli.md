@@ -161,7 +161,25 @@ The arguments after `--` go to the Python program.
 
 ## Credentials
 
-The CLI does not store an API key. It reads the same environment variables as the Python SDK:
+When the service offers single sign-on, log in once through the browser:
+
+```bash
+vfunc login --api-base https://gpu.example.com/api --profile gpu
+vfunc whoami
+vfunc logout
+```
+
+`vfunc login` opens the service's sign-on page and receives the result on a `127.0.0.1` listener. In
+a remote shell without a display, or with `--no-browser`, it prints a short code to approve from
+any browser instead. The minted key expires, by default after 30 days.
+
+The key is stored in `~/.config/vfunc/credentials.json` (or `$XDG_CONFIG_HOME/vfunc/`, or
+`VFUNC_CREDENTIALS`) with mode `0600`. Each login is a named profile, and the last login is the
+default. Select another profile with `--profile NAME` or `VFUNC_PROFILE`. A profile's key is only
+sent to that profile's API base. The Python SDK reads the same file.
+
+Otherwise, set the same environment variables as the Python SDK. They take precedence over stored
+profiles:
 
 ```bash
 export GFAAS_API_BASE=https://gpu.example.com/api
@@ -184,7 +202,7 @@ vfunc \
   pool list
 ```
 
-Use the environment variables for normal operation. The CLI has no API-key option.
+The CLI has no API-key option. Use `vfunc login` or the environment variables.
 
 ## Run a CUDA file
 

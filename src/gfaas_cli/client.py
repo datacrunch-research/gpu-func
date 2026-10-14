@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import tempfile
@@ -19,6 +20,7 @@ from gfaas import (
     RemoteResult,
     StageArtifactBinding,
     call_status_summary,
+    credentials,
 )
 from gfaas.errors import GfaasError
 
@@ -35,10 +37,19 @@ _TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
 
 
 def client_config_from_args(args: argparse.Namespace) -> ClientConfig:
-    """Build one SDK configuration from environment and global CLI options."""
-    defaults = ClientConfig.from_env()
+    """Build one SDK configuration from environment and global CLI options.
+
+    --api-base and --profile select the stored login like GFAAS_API_BASE and VFUNC_PROFILE, so a
+    stored key is never sent to another API base.
+    """
+    environment = dict(os.environ)
+    if args.api_base:
+        environment["GFAAS_API_BASE"] = args.api_base
+    if getattr(args, "profile", None):
+        environment[credentials.PROFILE_VARIABLE] = args.profile
+    defaults = ClientConfig.from_env(environment)
     return ClientConfig(
-        api_base=args.api_base or defaults.api_base,
+        api_base=defaults.api_base,
         api_key=defaults.api_key,
         upload_concurrency=defaults.upload_concurrency,
         upload_completion_timeout_s=defaults.upload_completion_timeout_s,
