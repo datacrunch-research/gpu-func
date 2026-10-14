@@ -12,6 +12,7 @@ from typing import Any
 from . import cuda_runner
 from .artifacts import ArtifactOutput
 from .client import Client, RemoteResult
+from .compatibility import Compatibility
 from .errors import CudaCompilationError, CudaProcessError, GfaasError
 from .image import Image
 from .stages import CallStage, StageArtifactBinding
@@ -61,6 +62,7 @@ def compile_and_run(
     program_args: list[str] | None = None,
     timeout_s: int = 600,
     image: Image | str = CUDA_IMAGE,
+    compatibility: Compatibility | None = None,
     client: Client | None = None,
 ) -> dict[str, Any]:
     """Compile, run, and (optionally) ``ncu``-profile a CUDA source string.
@@ -82,6 +84,7 @@ def compile_and_run(
         program_args=program_args,
         timeout_s=timeout_s,
         image=image,
+        compatibility=compatibility,
         client=client,
     ).wait()
     _raise_for_failure(report)
@@ -100,11 +103,13 @@ def spawn(
     program_args: list[str] | None = None,
     timeout_s: int = 600,
     image: Image | str = CUDA_IMAGE,
+    compatibility: Compatibility | None = None,
     client: Client | None = None,
 ) -> RemoteResult:
     c = client or Client()
     return c.submit(
         image=image,
+        compatibility=compatibility,
         function=cuda_runner.run,  # SDK packages cuda_runner.py automatically
         kwargs={
             "source": source,

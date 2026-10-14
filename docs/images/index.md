@@ -14,4 +14,5 @@ receives storage credentials.
 
 - [Prepared images](prepared.md)
 - [Remote images](remote.md)
+- [Hardware requirements and native images](hardware.md)
 - [Qualify a published image](qualification.md)

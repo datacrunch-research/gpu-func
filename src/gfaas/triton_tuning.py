@@ -8,6 +8,7 @@ from typing import Any
 from . import triton_tuning_runner
 from .artifacts import ArtifactOutput
 from .client import Client, RemoteResult
+from .compatibility import Compatibility
 from .image import Image
 from .stages import CallStage, StageArtifactBinding
 
@@ -85,6 +86,7 @@ def spawn_triton_tuning(
     cases: list[TritonCase],
     target_arch: int,
     image: Image | str,
+    compatibility: Compatibility | None = None,
     gpu: str,
     compile_workers: int = 4,
     compile_cpu_millicores: int = 4000,
@@ -130,6 +132,7 @@ def spawn_triton_tuning(
     publisher = client or Client()
     return publisher.submit(
         image=image,
+        compatibility=compatibility,
         function=triton_tuning_runner.run,
         kwargs={
             "source": source,

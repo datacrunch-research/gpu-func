@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .artifacts import ArtifactCheckpoint, ArtifactOutput
+from .compatibility import Compatibility
 from .image import Image
 
 if TYPE_CHECKING:
@@ -48,6 +49,7 @@ class Function:
     max_output_bytes: int | None = None
     env: dict[str, str] = field(default_factory=dict)
     outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = ()
+    compatibility: Compatibility | None = None
 
     def __post_init__(self) -> None:
         self.name = self.handler.__name__
@@ -83,6 +85,7 @@ class Function:
     ) -> RemoteResult:
         return self.app.client.submit(
             image=self._resolve_image(),
+            compatibility=self.compatibility,
             function=self.handler,
             args=args,
             kwargs=kwargs,
@@ -133,6 +136,7 @@ class App:
         self,
         *,
         image: Image | None = None,
+        compatibility: Compatibility | None = None,
         gpu: str | None = None,
         gpu_count: int | None = None,
         gpu_type: str = "any",
@@ -152,6 +156,7 @@ class App:
                 app=self,
                 handler=handler,
                 image=image,
+                compatibility=compatibility,
                 gpu=gpu,
                 gpu_count=gpu_count,
                 gpu_type=gpu_type,

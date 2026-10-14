@@ -33,6 +33,7 @@ from .artifacts import (
     collect_artifact_ids,
 )
 from .bundle import empty_bundle, package_single_file
+from .compatibility import Compatibility
 from .config import ClientConfig
 from .errors import (
     ArtifactTreeUploadError,
@@ -925,6 +926,7 @@ class Client:
         self,
         *,
         image: Image | str,
+        compatibility: Compatibility | None = None,
         function: tuple[str, str] | Any,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
@@ -967,6 +969,29 @@ class Client:
             raise GfaasError(
                 "qualification_image_digest does not match the Image remote descriptor"
             )
+        variants = image.registry_variants if isinstance(image, Image) else None
+        requirements = compatibility.request() if compatibility is not None else {}
+        if variants is not None and compatibility is not None:
+            required = compatibility.cpu_architecture
+            if required is not None and required not in variants:
+                raise GfaasError(f"image has no variant for required CPU architecture {required}")
+        if requirements or variants is not None:
+            supported = self.get_capabilities().get("environment_compatibility")
+            if not isinstance(supported, dict):
+                raise GfaasError("service does not advertise Environment hardware requirements")
+            if variants is not None and supported.get("image_variants") is not True:
+                raise GfaasError("service does not support native image variants")
+            if requirements.get("cpu_architecture") is not None and requirements[
+                "cpu_architecture"
+            ] not in supported.get("cpu_architectures", []):
+                raise GfaasError("service does not support the requested CPU architecture")
+            if (
+                requirements.get("gpu_compute_capabilities")
+                and supported.get("gpu_compute_capabilities") != "exact"
+            ):
+                raise GfaasError(
+                    "service does not support exact GPU compute capability requirements"
+                )
         gpu_request = _gpu_request(gpu, gpu_count, gpu_type)
         kwargs = dict(kwargs or {})
         if isinstance(function, tuple) and source_file is None:
@@ -1004,13 +1029,16 @@ class Client:
         }
         if remote_source is not None:
             environment_source["remote"] = remote_source
-        environment = self.create_environment(
-            {
-                "name": image_name,
-                "source": environment_source,
-                "variables": dict(env or {}),
-            }
-        )
+        if variants is not None:
+            environment_source = {"kind": "registered_images", "images": dict(variants)}
+        environment_definition = {
+            "name": image_name,
+            "source": environment_source,
+            "variables": dict(env or {}),
+        }
+        if requirements:
+            environment_definition["compatibility"] = requirements
+        environment = self.create_environment(environment_definition)
         resources = {
             "gpu": gpu_request,
             "timeout_seconds": timeout_s,

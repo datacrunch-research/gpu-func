@@ -73,9 +73,11 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
         "ncu_csv": "metric,value\nsm__throughput.avg.pct_of_peak_sustained_elapsed,12.3\n",
     }
     client = FakeClient(fake_result)
+    requirements = gfaas.Compatibility(cpu_architecture="amd64", gpu_compute_capabilities=("10.0",))
 
     result = gfaas.compile_and_run(
         ADD_CU_SOURCE,
+        compatibility=requirements,
         gpu="B200",
         gpu_type="b200",
         profile=True,
@@ -92,6 +94,7 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
     stages = call.pop("stages")
     assert call == {
         "image": gfaas.Image("cuda-nvcc"),
+        "compatibility": requirements,
         "function": cuda_runner.run,
         "kwargs": {
             "source": ADD_CU_SOURCE,

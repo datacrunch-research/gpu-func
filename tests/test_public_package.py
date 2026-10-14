@@ -23,6 +23,7 @@ def test_documented_public_sdk_surface_is_available() -> None:
         "ArtifactUploadProgress",
         "Client",
         "ClientConfig",
+        "Compatibility",
         "CallStage",
         "CudaCompilationError",
         "CudaError",
