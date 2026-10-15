@@ -7,6 +7,7 @@ import os
 import re
 
 from . import general
+from .compatibility import add_compatibility_options
 
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
 # top-level `vfunc <mode>` that auto-detects the exercise from the cwd.
@@ -82,7 +83,10 @@ def _add_remote_opts(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--gpu-count", type=_positive_int, default=1)
     parser.add_argument("--image", default=os.environ.get("GFAAS_IMAGE", "cuda-nvcc"))
-    parser.add_argument("--arch")
+    parser.add_argument(
+        "--arch", help="CUDA compiler target, e.g. sm_103; not a placement requirement"
+    )
+    add_compatibility_options(parser)
     parser.add_argument("--timeout", type=_positive_int, default=600)
     parser.add_argument("--capacity-wait", type=_nonnegative_int)
     parser.add_argument("--wait-timeout", type=_nonnegative_float)

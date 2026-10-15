@@ -17,6 +17,7 @@ from gfaas.errors import GfaasError
 from . import general
 from .client import GfaasClient, sdk_client_from_args
 from .commands import _cmd_custom, _cmd_exercise, _cmd_exercise_mode, _cmd_workers
+from .compatibility import compatibility_from_args
 from .constants import RC_SETUP
 from .errors import CliError
 from .parser import EXERCISE_MODES
@@ -55,6 +56,10 @@ def _main(
     if argv is None:
         argcomplete.autocomplete(parser)
     args = parser.parse_args(command_line)
+    try:
+        args.compatibility = compatibility_from_args(args)
+    except ValueError as exc:
+        parser.error(str(exc))
     if program_args and not general.accepts_program_args(args):
         parser.error("program arguments after -- require the run command")
 
