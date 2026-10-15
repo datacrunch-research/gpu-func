@@ -82,6 +82,7 @@ class FakeSdkClient:
 def args(**overrides):
     values = {
         "image": "cuda-nvcc",
+        "compatibility": None,
         "gpu_count": 1,
         "gpu_type": "gb300",
         "timeout": 600,

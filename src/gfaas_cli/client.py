@@ -148,6 +148,7 @@ class GfaasClient:
                 )
             return self._client.submit(
                 image=args.image,
+                compatibility=args.compatibility,
                 function=run_worker_job,
                 kwargs={
                     "job": job,

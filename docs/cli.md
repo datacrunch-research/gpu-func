@@ -306,6 +306,35 @@ The CLI prints the serialized return value after the Call completes.
 
 Use a Python SDK program when the callable needs typed arguments or keyword arguments.
 
+## Require compatible hardware
+
+Remote submission commands accept `--cpu-architecture` and repeatable `--gpu-compute-capability`
+options. These apply to `run`, `custom`, `exercise`, and the top-level exercise shortcuts.
+
+```bash
+vfunc run experiment.py --image research-arm --gpu-type any \
+  --cpu-architecture arm64 \
+  --gpu-compute-capability 10.0 --gpu-compute-capability 10.3
+```
+
+`--cpu-architecture` accepts `amd64` or `arm64`. The selected image must match that architecture.
+Each `--gpu-compute-capability` value is an exact alternative in `major.minor` form, not a minimum
+version. Every assigned GPU must match one of the values. You can specify up to 32 distinct values.
+Omitting either option adds no requirement for that field; the image still restricts CPU
+architecture.
+
+These options set the Environment's hardware requirements. The SDK checks service support, and the
+service enforces placement. CPU-only stages keep the CPU requirement but do not require a GPU. An
+existing GPU pool selection still restricts placement.
+
+Hardware requirements do not set compiler flags. For `custom` and exercise commands, `--arch sm_103`
+sets the CUDA compilation target. For `run kernel.cu`, use `--nvcc-flag=-arch=sm_103`. Neither
+compiler option declares a placement requirement. Hardware matching does not establish CUDA driver,
+framework, or library compatibility.
+
+See [hardware requirements and native images](images/hardware.md) for placement states and mismatch
+details.
+
 ## Select resources
 
 The `run` command accepts these resource options:

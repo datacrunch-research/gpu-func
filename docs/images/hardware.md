@@ -84,6 +84,11 @@ image variants. It reports an error instead of silently removing requirements.
 Hardware matching does not establish CUDA driver, framework, or library compatibility. Those are
 properties of the workload and its images.
 
+The CLI accepts the same requirements through `--cpu-architecture` and repeatable
+`--gpu-compute-capability` options. See
+[CLI hardware requirements](../cli.md#require-compatible-hardware) for examples and their
+relationship to CUDA compiler flags.
+
 ## Keep stages and inputs compatible
 
 All stages of one Call use the same selected CPU architecture. Placement retries retain it too.

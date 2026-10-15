@@ -23,6 +23,7 @@ from gfaas.artifacts import ArtifactOutput
 from gfaas.client import Client, RemoteResult
 from gfaas.cuda import staged_execution_plan
 
+from .compatibility import add_compatibility_options
 from .errors import CliError
 from .events import show_event
 
@@ -110,6 +111,7 @@ def add_commands(commands: Any) -> None:
     run.add_argument("--image", help="registered image name")
     run.add_argument("--gpu-type", help="GPU pool name; defaults to GFAAS_GPU_TYPE or any")
     run.add_argument("--gpu-count", type=_positive_integer, default=1)
+    add_compatibility_options(run)
     run.add_argument("--timeout", type=_positive_integer, default=600, metavar="SECONDS")
     run.add_argument("--capacity-wait", type=_positive_integer, metavar="SECONDS")
     run.add_argument("--cpu-millicores", type=_positive_integer)
@@ -240,6 +242,7 @@ def _submission_options(args: argparse.Namespace) -> dict[str, Any]:
     gpu_type = args.gpu_type or os.environ.get("GFAAS_GPU_TYPE") or "any"
     return {
         "gpu_count": args.gpu_count,
+        "compatibility": args.compatibility,
         "gpu_type": gpu_type,
         "timeout_s": args.timeout,
         "capacity_wait_s": args.capacity_wait,
