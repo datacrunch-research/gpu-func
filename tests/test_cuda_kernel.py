@@ -1,5 +1,7 @@
 import hashlib
+import importlib.metadata
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -188,10 +190,17 @@ def test_cpu_compilation_discovers_wheel_nvcc_and_retains_variant_failures(monke
     monkeypatch.setattr("gfaas.cuda_runner._subprocess_env", lambda _: {})
     distribution = SimpleNamespace(
         metadata={"Name": "nvidia-cuda-nvcc"},
-        files=["wheel/bin/nvcc"],
+        files=[Path("wheel/bin/nvcc")],
         locate_file=lambda entry: tmp_path / entry,
     )
-    monkeypatch.setattr(runner.importlib.metadata, "distributions", lambda: [distribution])
+    monkeypatch.setattr(importlib.metadata, "distributions", lambda: [distribution])
+    monkeypatch.setattr(
+        importlib.metadata,
+        "distribution",
+        lambda name: (_ for _ in ()).throw(importlib.metadata.PackageNotFoundError(name)),
+    )
+    for name in ("CUDACXX", "CUDA_HOME", "CUDA_PATH"):
+        monkeypatch.delenv(name, raising=False)
     commands = []
 
     def run(command, **kwargs):
@@ -218,11 +227,8 @@ def test_cpu_compilation_discovers_wheel_nvcc_and_retains_variant_failures(monke
     assert (tmp_path / "compiled-cuda-kernel/manifest.json").exists()
 
 
-@pytest.mark.parametrize("shared_memory", [0, 512])
-@pytest.mark.parametrize("active_context", [False, True])
-def test_driver_launch_preserves_pointer_scalar_widths_and_stream(
-    monkeypatch, shared_memory, active_context
-):
+@pytest.mark.parametrize("shared_memory", [0, 65536])
+def test_driver_launch_preserves_pointer_scalar_widths_and_stream(monkeypatch, shared_memory):
     import ctypes
     import sys
 
@@ -254,7 +260,6 @@ def test_driver_launch_preserves_pointer_scalar_widths_and_stream(
         return 0
 
     cuda = SimpleNamespace(
-        cuCtxGetCurrent=Function(lambda pointer: output(pointer, int(active_context))),
         cuFuncSetAttribute=Function(
             lambda function, attribute, value: attributes.append((attribute, value)) or 0
         ),
@@ -267,8 +272,11 @@ def test_driver_launch_preserves_pointer_scalar_widths_and_stream(
         sys.modules,
         "torch",
         SimpleNamespace(
-            empty=lambda *args, **kwargs: initialized.append((args, kwargs)),
-            cuda=SimpleNamespace(current_stream=lambda: SimpleNamespace(cuda_stream=2**40)),
+            cuda=SimpleNamespace(
+                current_device=lambda: 2,
+                set_device=lambda device: initialized.append(device),
+                current_stream=lambda: SimpleNamespace(cuda_stream=2**40),
+            ),
         ),
     )
     tensor = SimpleNamespace(is_cuda=True, data_ptr=lambda: 2**45 + 16)
@@ -280,7 +288,7 @@ def test_driver_launch_preserves_pointer_scalar_widths_and_stream(
     }
     candidate = runner.load_candidate(b"cubin", "entry", variant, lambda meta: (1,))
     candidate(tensor, 2**40, 1.25)
-    assert bool(initialized) is (not active_context)
+    assert initialized == [2]
     assert attributes == ([(8, shared_memory)] if shared_memory else [])
     assert captured == {
         "function": 43,

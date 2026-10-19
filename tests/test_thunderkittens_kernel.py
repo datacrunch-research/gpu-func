@@ -170,6 +170,11 @@ class FakeClient:
             )
         return SimpleNamespace(call_id=identity, wait=lambda: output)
 
+    def get_call(self, identity):
+        return {
+            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
+        }
+
     def get_call_result(self, identity):
         return {"artifacts": [{"name": "compiled-cuda-kernel", "artifact_id": "art_" + identity}]}
 
@@ -284,3 +289,13 @@ def test_raw_module_load_establishes_context_before_driver_call(monkeypatch):
     )
     assert callable(candidate)
     assert events == [("context", 2), ("module",)]
+
+
+def test_compiler_environment_changes_invalidate_cache(headers):
+    client = FakeClient()
+    app = App("test", image=Image("image"), client=client)
+    kernel = ThunderKittensKernel("source", "launch", signature={"N": "int32"}, headers=headers)
+    for flags in ("-DFLAG=1", "-DFLAG=2", "-DFLAG=2"):
+        with app.function(gpu="gb300", env={"NVCC_PREPEND_FLAGS": flags}):
+            kernel[(1,)](64)
+    assert client.phases.count("compile_batch") == 2
