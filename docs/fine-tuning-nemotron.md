@@ -2,7 +2,7 @@
 
 This chapter runs supervised fine-tuning (SFT) with LoRA through the public `gfaas` API.
 
-gfaas stages the model and training data as immutable Artifacts. A prepared image runs NVIDIA NeMo
+gfaas stages the model and training data as immutable Artifacts. A registered image runs NVIDIA NeMo
 AutoModel on one worker. The Call publishes the adapter, training report, and recovery checkpoints
 as new Artifacts.
 
@@ -56,11 +56,12 @@ Ask your gfaas operator for these public values:
 
 - The API base URL and API key.
 - A GPU-pool name, such as `gb300` or `b200`.
-- The prepared image name. The examples default to `nemo-automodel-lora-cu130`.
+- The registered image name. The examples default to `nemo-automodel-lora-cu130`.
 - A readable model Artifact ID, if the service already stores the model.
 - The resource ceilings for GPU count, memory, scratch space, and execution time.
 
-Install the SDK and the client-side tokenizer dependency:
+From a [repository checkout](install.md#run-repository-examples), install the SDK and the
+client-side tokenizer dependency:
 
 ```bash
 uv sync --extra training-example

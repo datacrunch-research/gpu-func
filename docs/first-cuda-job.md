@@ -1,7 +1,7 @@
 # First CUDA job
 
-The repository contains a standalone CUDA program. The program prints device information and a
-small vector result.
+From a [repository checkout](install.md#run-repository-examples), the repository contains a
+standalone CUDA program. The program prints device information and a small vector result.
 
 ## Run the example
 
@@ -70,12 +70,12 @@ int main() {
 
 job = spawn(
     SOURCE,
-    gpu="any",
+    gpu_count=1,
     gpu_type=os.environ["GFAAS_GPU_TYPE"],
     timeout_s=120,
 )
 
-print("job:", job.job_id)
+print("call:", job.call_id)
 print("initial state:", job.status()["state"])
 
 result = job.wait(timeout_s=150)
@@ -87,7 +87,7 @@ print("final state:", job.status()["state"])
 Run it:
 
 ```bash
-python my_gpu_job.py
+uv run python my_gpu_job.py
 ```
 
 The expected output contains `0 1 4 9 16 25 36 49`. Replace `SOURCE` with another self-contained

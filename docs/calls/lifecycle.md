@@ -17,7 +17,7 @@ if __name__ == "__main__":
             image="cuda-nvcc",
             function=add_one,
             args=(42,),
-            gpu="any",
+            gpu_count=1,
             gpu_type="gb300",
             timeout_s=300,
             idempotency_key="my-key-1",
@@ -74,3 +74,28 @@ sends the request to its assigned worker.
 
 Read the returned Call state. Then use `wait()` or `status()` until the Call reaches a terminal
 state. If cancellation succeeds, `wait()` raises `GfaasError` because the Call did not succeed.
+
+## Reconnect from another process
+
+Store the Call ID before a long wait. A new process can inspect or wait for that Call with the same
+principal's API credentials:
+
+```python
+import os
+
+import gfaas
+
+with gfaas.Client() as client:
+    call_id = os.environ["SAVED_CALL_ID"]
+    print(gfaas.call_status_summary(client.get_call(call_id)))
+    print(client.get_call_logs(call_id))
+    result = client.wait_for_result(call_id, timeout_s=60)
+```
+
+This does not resubmit the workload. `wait_for_result()` decodes the Python result, so the
+[serialization trust rules](../python-functions.md#serialization-and-trust) apply. For status-only
+tools, use `get_call()` and avoid result decoding.
+
+A timeout ends the local wait, not the remote Call. A failed Call is terminal; waiting again does
+not restart it. Submit a new Call if you need another attempt. Use an application checkpoint when
+resuming computation. A resumable Artifact upload is a separate operation.

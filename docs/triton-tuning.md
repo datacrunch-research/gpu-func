@@ -1,4 +1,8 @@
-# Triton candidate tuning
+# Explicit Triton candidate tuning
+
+This source-based helper is separate from [managed Triton kernels](kernels/triton.md). Use it when
+you want explicit input cases and one two-stage Call. The managed wrapper accepts native kernels and
+provides a client-side specialization cache. Neither interface replaces the other.
 
 `spawn_triton_tuning` submits one Call with two stages. The first stage uses CPU resources and no
 GPU. It compiles each candidate for a specified CUDA SM target and publishes one transient Artifact.
