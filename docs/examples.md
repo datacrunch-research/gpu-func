@@ -1,4 +1,4 @@
-# Examples and API reference
+# Examples
 
 The repository contains standalone Python and CUDA examples in `examples/cli/`. Each example is a
 complete source file that the `vfunc` command can submit.
@@ -54,17 +54,23 @@ uv sync --extra training-example
 
 Read [Fine-tune Nemotron with LoRA](fine-tuning-nemotron.md) before you submit a training Call.
 
-## API reference
+## Managed kernel examples
 
-The SDK exports its public Python API from the `gfaas` package. Start with these modules:
+The kernel examples require local tensor/compiler packages and a compatible registered image. Read
+[managed kernels](kernels/index.md) before running them. Some examples request three GPUs and large
+compilation batches; they are not all suitable for a one-GPU service.
 
-| Module            | Purpose                                               |
-| ----------------- | ----------------------------------------------------- |
-| `gfaas`           | Applications, functions, Calls, Images, and Artifacts |
-| `gfaas.client`    | The lower-level HTTP client                           |
-| `gfaas.cuda`      | CUDA compilation, execution, and profiling            |
-| `gfaas.artifacts` | Artifact references and declared outputs              |
+| Example                                                                                                        | Workload                                         |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| [First Triton kernel](kernels/triton.md)                                                                       | A small one-configuration addition               |
+| [Triton matmul](https://github.com/datacrunch-research/gpu-func/blob/main/examples/triton_matmul_benchmark.py) | Configuration search and fresh/cached benchmarks |
+| [TLX](https://github.com/datacrunch-research/gpu-func/blob/main/examples/tlx_kernels.py)                       | Shared-memory and warp-specialized kernels       |
+| [Gluon](https://github.com/datacrunch-research/gpu-func/blob/main/examples/gluon_kernels.py)                   | Copy, accumulating addition, and softmax         |
+| [Helion](https://github.com/datacrunch-research/gpu-func/blob/main/examples/helion_kernels.py)                 | Tensor returns, mutation, reduction, and matmul  |
+| [CUDA C++](https://github.com/datacrunch-research/gpu-func/blob/main/examples/cuda_kernel.py)                  | Raw device entry points and configuration tuning |
+| [ThunderKittens](https://github.com/datacrunch-research/gpu-func/blob/main/examples/thunderkittens_kernels.py) | Host launchers and CUDA configurations           |
+| [C++ CUTLASS](https://github.com/datacrunch-research/gpu-func/blob/main/examples/cutlass_kernel.py)            | Shared-library launchers and GEMM                |
+| [CuTe DSL](https://github.com/datacrunch-research/gpu-func/blob/main/examples/cute_kernel.py)                  | Host entries compiled to reusable objects        |
 
-The lower-level client accepts REST request dictionaries. Read the source docstrings for exact
-method signatures. A complete Python reference belongs in this public guide; readers do not need
-access to the service's private implementation repository.
+See the [Python API reference](reference/index.md) for constructors, options, return values, and
+errors.

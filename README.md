@@ -1,56 +1,44 @@
-# gfaas SDK and vfunc CLI
+# vFunc Python SDK and CLI
 
-This repository is the public home of the gfaas Python SDK and its `vfunc` command. The command runs
-Python and CUDA files, manages durable Calls and Artifacts, and can run CUDA directly on a local
-NVIDIA GPU. It also operates CUDA exercises and custom kernels on remote GPUs.
+vFunc runs functions on remote GPU machines. Submit Python code or CUDA programs, choose the
+hardware and software environment, and collect results without managing the worker yourself. Calls
+have durable IDs, retained logs, and input and output Artifacts.
 
-`vfunc` replaces the previous `gfaas` command. The Python distribution and import namespace remain
-`gfaas`.
+This repository contains the public Python SDK and the `vfunc` command. The Python package and
+imports remain `gfaas`. The service and its credentials come from your operator.
 
-The CUDA client provides these workflows:
-
-- Compile, test, benchmark, profile, sanitize, or grade a CUDA course exercise.
-- Compile, operate, or profile a custom CUDA program.
-- Submit durable gfaas Calls that support cancellation and retained events.
-- Publish Nsight Compute reports as gfaas Artifacts.
-- Read an existing `.ncu-rep` file on a computer with Nsight Compute.
-
-Read the [gfaas SDK guide](docs/introduction.md) for installation, concepts, examples, and the
-`vfunc` command reference. Read [GUIDE.md](GUIDE.md) for the CUDA workflow guide.
+Read the [user guide](docs/introduction.md) for installation and examples.
 
 ## Install
 
-Install the SDK and command from the public Git repository:
+For the command-line client:
 
 ```bash
 uv tool install "git+https://github.com/datacrunch-research/gpu-func.git"
 vfunc --help
 ```
 
-## Configure credentials
-
-Set the gfaas API address and API key in the environment:
+For the Python SDK in an existing uv project:
 
 ```bash
-export GFAAS_API_BASE="https://gpu.example.com/api"
-export GFAAS_API_KEY="..."
-vfunc pool list
+uv add "git+https://github.com/datacrunch-research/gpu-func.git"
 ```
 
-The CLI does not accept an API key argument. This rule keeps the key out of the shell history and
-the process list.
+Read [installation](docs/install.md) for standalone environments, repository examples, and upgrades.
 
-## Use the Python SDK
+## Submit a Python function
 
-The SDK provides a small function API and a lower-level durable Call client:
+Set `GFAAS_API_BASE` to your service's API URL, ending in `/api`. Supply `GFAAS_API_KEY` through
+your normal secret mechanism. Replace the image and pool below with values supplied by your
+operator. The image must contain compatible Python and PyTorch versions.
 
 ```python
 import gfaas
 
-app = gfaas.App("hello")
+app = gfaas.App("hello", image=gfaas.Image("pytorch-cu130"))
 
 
-@app.function(image=gfaas.Image.from_registry("pytorch-cu130"), gpu_count=1, gpu_type="gb300")
+@app.function(gpu_count=1, gpu_type="gb300")
 def gpu_name() -> str:
     import torch
 
@@ -61,104 +49,51 @@ if __name__ == "__main__":
     print(gpu_name.remote())
 ```
 
-The general CLI can submit Python and CUDA source files:
+Save this as a Python file and run it with `uv run python your_program.py`. The SDK packages that
+file. It does not package your entire project or install dependencies remotely. Read
+[Python functions](docs/python-functions.md) for outputs, resource limits, and serialization safety.
+
+## Run source files
 
 ```bash
-vfunc run experiment.py --gpu-type gb300
-vfunc run kernel.cu --gpu-type gb300 -- --problem-size 4096
+vfunc run experiment.py --image YOUR_PYTHON_IMAGE --gpu-type YOUR_POOL
+vfunc run kernel.cu --gpu-type YOUR_POOL --nvcc-flag=-arch=sm_103
 ```
 
-Remote CUDA Calls use two durable stages. The compile stage uses CPU and memory, but it holds no GPU
-lease. The execution stage requests the GPU after the compiled Artifact is durable.
+Use the CUDA compilation target for your GPU. CUDA programs need `main()`. Remote CUDA compilation
+uses a CPU stage before the Call requests GPU capacity.
 
-The [Nemotron LoRA guide](docs/fine-tuning-nemotron.md) covers bounded fine-tuning Calls,
-checkpoints, resume, and adapter download.
-
-Use `vfunc local run` to run trusted CUDA source on a local NVIDIA GPU:
+To submit a Call and disconnect:
 
 ```bash
-vfunc local info
-vfunc local run kernel.cu -- --problem-size 4096
-```
-
-Calls remain available after the submitting process disconnects. Use the CLI to inspect or cancel
-them:
-
-```bash
+vfunc run kernel.cu --gpu-type YOUR_POOL --nvcc-flag=-arch=sm_103 --detach
 vfunc call show call_...
 vfunc call logs call_... --follow
 vfunc call artifacts call_...
 vfunc artifact download art_... ./result
-vfunc call cancel call_... --reason "no longer needed"
 ```
 
-Generate completion setup for Bash, Fish, Zsh, or PowerShell:
+## Choose a workflow
 
-```bash
-eval "$(vfunc completion bash)"
-```
+| Task                                   | Guide                                                |
+| -------------------------------------- | ---------------------------------------------------- |
+| Run ordinary Python functions          | [Python functions](docs/python-functions.md)         |
+| Compile, tune, and benchmark kernels   | [Managed kernels](docs/kernels/index.md)             |
+| Run CUDA programs and course exercises | [CUDA workflows](GUIDE.md)                           |
+| Select images for ARM or x86 workers   | [Images and hardware](docs/images/hardware.md)       |
+| Transfer files or recover an upload    | [Artifacts](docs/artifacts/upload-download.md)       |
+| Reconnect to a Call                    | [Call lifecycle](docs/calls/lifecycle.md)            |
+| Fine-tune a model with LoRA            | [Nemotron walkthrough](docs/fine-tuning-nemotron.md) |
+| Find API parameters and return values  | [Python API reference](docs/reference/index.md)      |
+| Install the CLI skill for an agent     | [Agent setup](examples/cli/README.md)                |
 
-## Operate a custom CUDA program
-
-Use `--gpu-type` if the coordinator has more than one GPU pool. The CLI selects the pool
-automatically if the coordinator has exactly one pool.
-
-```bash
-vfunc custom run kernel.cu
-vfunc custom run kernel.cu --harness harness.cu --gpu-type gb300
-vfunc custom profile kernel.cu --artifact-dir ./profiles
-```
-
-The `run` and `profile` commands compile without a GPU lease. They publish the prepared workspace as
-an internal Artifact. The GPU stage starts after the Artifact is durable and a GPU is reserved. The
-`compile` command requests no GPU.
-
-The worker detects its CUDA architecture by default. Use `--arch` only when the source needs an
-explicit compilation target.
-
-## Operate a course exercise
-
-Run a command from a directory that contains `run.py` and `runner/cli.py`:
-
-```bash
-vfunc compile
-vfunc test
-vfunc benchmark
-vfunc sanitizer
-vfunc profile --artifact-dir ./profiles
-vfunc grade
-```
-
-Use `--exercise-dir` to select an exercise from a different directory.
-
-## Durable Calls
-
-Use `--detach` to return after submission:
-
-```bash
-vfunc custom run kernel.cu --detach
-vfunc call watch call_...
-vfunc call logs call_... --follow
-vfunc call artifacts call_...
-```
-
-If you interrupt a foreground command, `vfunc` requests Call cancellation. The Call identity remains
-available in the coordinator.
-
-## Remote data model
-
-`vfunc` sends the selected source files as an immutable tree Artifact. The worker copies that tree
-to its scratch directory before compilation.
-
-The CLI rejects symbolic links, hard links, unsafe paths, oversized workspaces, and existing local
-output files. Binary exercise fixtures remain unchanged.
-
-Nsight Compute reports do not travel in result JSON. The worker publishes them through the declared
-`profiles` output Artifact.
+Managed kernels support Triton, TLX, Gluon, Helion, CUDA C++, ThunderKittens, C++ CUTLASS, and CuTe
+DSL. Their wrappers compile configurations and can tune or benchmark them on remote GPUs. The guide
+explains image requirements, correctness checks, tensor writes, caching, and resource use.
 
 ## Develop
 
-Create the locked development environment and run all checks from this repository:
+From a checkout:
 
 ```bash
 uv sync --extra dev --locked
@@ -166,790 +101,15 @@ uv run ruff format --check src tests
 uv run ruff check src tests
 uv run mypy src
 uv run pytest -q
-mdbook build docs
-mdbook test docs
+dprint check
+python scripts/check-docs.py
 ```
 
-## Triton compilation, tuning, and execution
-
-```python
-import gfaas as vfunc
-
-app = vfunc.App("kernels", image=vfunc.Image("registered-triton-image"))
-kernel = vfunc.TritonKernel(
-    native_kernel,
-    tuning=vfunc.TritonTuning(
-        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
-        evaluate=evaluate,
-    ),
-)
-with app.function(gpu="gb300", cpu_millicores=16000, memory_bytes=4 * 1024**3):
-    kernel[grid](a, b, out, M=m, N=n, K=k)
-# out now contains the remote kernel's writes.
-for specialization, result in kernel.tuning_results.items():
-    print(specialization, result["benchmark"]["best_configuration"])
-```
-
-`app.function(...)` works as its existing decorator and as a context manager. The block executes on
-the client and its vFunc calls execute remotely. Nested scopes on the same App inherit omitted
-settings; explicit values replace them, including `None` to clear a setting. `env` dictionaries
-replace the parent value. Contexts restore on exit, including exceptions, and are isolated across
-threads and asynchronous tasks. Decorated functions capture their settings. Kernel calls snapshot
-the current context; a kernel can be reused in different contexts safely.
-
-`TritonKernel` has no App, image, resource, or architecture arguments. A call requires an active
-context with an image and one GPU target. A small GPU Call discovers its CUDA architecture before
-CPU-only compilation. Benchmarking checks that its assigned GPU matches. Image overrides, timeouts,
-capacity waits, CPU/memory, environment variables and storage/log/output limits use the ordinary
-Function submission path. The App owns the client. Phase outputs are managed by the wrapper.
-
-Plain JIT and vanilla autotuning directly wrapping JIT are accepted. vFunc extracts the
-configurations and never runs Triton's autotuner. Additional wrappers, heuristics, callbacks,
-pruning, custom benchmarking, IR overrides and unsupported modifiers fail before submission. Mutable
-kernels are revalidated. Kernel/helper source is reconstructed without importing the author's
-module; unsupported dependencies fail clearly. Arbitrary Python source is not statically proven free
-of side effects.
-
-CPU compiler threads follow the CPU budget (one per whole core, up to 32). Omitted compilation
-resources default to 16 cores and 4 GiB per job. Small shards clamp CPU reservations. Defaults allow
-eight concurrent jobs with chunks targeting 128 configurations and growing to 256 before another
-dispatch wave. 1,024 variants use eight chunks of 128; 1,536 use eight of 192. This can reserve 128
-cores and 32 GiB concurrently. `variants_per_job`, `max_concurrent_jobs`, and
-`cache_compression_level` remain compiler batching options (gzip level 1 by default). Per-shard
-archives and SHA-256 manifests are verified before GPU use. Reports preserve variant order, Call
-IDs, phase timings, CPU time and cache sizes. Structural failures stop queued jobs while active
-results are retained.
-
-### Benchmark inputs, pruning and replication
-
-`TritonKernel` snapshots the actual invocation tensors into host storage bytes. Each GPU clones
-those storages into independent input-ring slots, preserving values, shapes, strides, offsets,
-dtypes, and aliases within each slot. CUDA storage is not serialized through cloudpickle. The client
-needs PyTorch for tensor transport; scalar arguments remain ordinary JSON values.
-
-Use
-[Triton's documented declarations](https://triton-lang.org/main/python-api/generated/triton.autotune.html),
-`reset_to_zero=["output"]` and `restore_value=["state"]` declarations on `@triton.autotune` to
-describe mutable benchmark inputs. Reset runs before every timed reuse, outside the timed interval.
-Restore uses the canonical host snapshot rather than a separate GPU backup for every slot. Arbitrary
-hooks and custom autotuning modifiers remain unsupported. Every mutated input that needs an initial
-value on reuse must be declared. Graph warmup and capture are separated by another reset; graph
-slots are distinct, and resets happen before replay rather than inside its timed region.
-
-A launch compiles and tunes an uncached specialization, then executes its winner once on a separate
-clone of the original invocation. It copies resulting tensor storage back into the caller's existing
-tensors and returns `None`. Benchmark reset/restore policies do not change the real invocation's
-supplied values. A plain JIT kernel without tuning compiles and executes its single configuration. A
-native autotuner with multiple configurations uses default `TritonTuning` when no tuning policy is
-supplied.
-
-`kernel.tuning_results` contains immutable reports indexed by specialization digest; there is no
-`last_tuning`. Each report includes `input_metadata`, `argument_names`, and `target` so the
-specialization can be identified without decoding its digest. The key includes source,
-configurations, argument values and tensor metadata, launch grid, image configuration, GPU pool,
-environment, Triton version, reset declarations, evaluator, and tuning policy. Tensor contents are
-excluded, so a subsequent call with new values and the same specialization executes the cached
-winner without repeating compilation or tuning. Artifacts are reused only with the same
-client/account. Reports and compiled artifacts are cached in this wrapper's memory; registry image
-names should identify immutable versions. Result reports describe tuning, while each invocation
-executes again. Calls on one wrapper are serialized to prevent duplicate concurrent tuning.
-
-```python
-kernel = vfunc.TritonKernel(
-    native_kernel,
-    tuning=vfunc.TritonTuning(
-        pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
-        refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
-        evaluate=evaluate,
-        replication_factor=3,
-    ),
-)
-with app.function(gpu="gb300"):
-    kernel[grid](*args, **kwargs)
-for specialization, result in kernel.tuning_results.items():
-    print(specialization, result["benchmark"]["best_configuration"])
-```
-
-Benchmark counts and estimated compute durations remain configurable separately from pruning and
-resource limits:
-
-```python
-tuning = vfunc.TritonTuning(
-    pilot_pruning=vfunc.TritonPruning(relative_delta=0.25, absolute_us=1.0),
-    refined_pruning=vfunc.TritonPruning(relative_delta=0.05, absolute_us=0.1),
-    benchmark=vfunc.TritonBenchmark(
-        pilot_trials=3,
-        refinement_duration_ms=1.0,
-        min_refinement_trials=10,
-        max_refinement_trials=250,
-        final_duration_ms=25.0,
-        min_final_trials=25,
-        max_final_trials=1000,
-        graph_duration_ms=1.0,
-        min_calls_per_graph=10,
-        max_calls_per_graph=100,
-        l2_flush_iterations=100,
-    ),
-    quick_benchmark_group_size=8,
-    quick_benchmark_variants_per_job=256,
-    quick_benchmark_max_concurrent_jobs=4,
-    replication_factor=3,
-    replication_max_attempts=8,
-    max_input_sets=65_536,
-    max_ring_bytes=8 * 1024**3,
-)
-```
-
-Durations describe estimated kernel compute, not wall-clock deadlines. Refinement is skipped when
-its estimated trial count is below `min_refinement_trials`. Final direct-event measurements use at
-least `min_final_trials`; graph replay counts use at least one replay. Both are bounded by
-`max_final_trials` (counting replays on the graph path). Iteration caps can shorten the requested
-compute budget. Durations must be finite and positive, counts must be positive integers, and minimum
-counts must not exceed their maximums.
-
-Each round retains times <= `best + max(relative_delta * best, absolute_us)`. Defaults allow 25% or
-1 us in the three-trial pilot, then 5% or 0.1 us in refinement and global replica reduction,
-whichever allowance is larger. The pilot leaves more room for noisy early measurements. The smaller
-refined absolute allowance avoids replicating almost every configuration of a short kernel. These
-are heuristic starting points tested on GB300; increase either allowance for noisier workloads or
-use an unpruned control to check selection quality. Replication still defaults to three distinct
-GPUs. Set either pruning policy to `None` to disable that round's pruning while still measuring it.
-The old percentage-only delta and runtime-exemption options are replaced by these independent
-policies.
-
-The GPU builds independent sets until their logical tensor footprint exceeds its reported L2 size.
-Shared storages are counted conservatively once. This is an allocation and scheduling contract, not
-a guarantee of cache eviction: kernels may access only a subset, and resets can warm cache lines.
-The supplied inputs must exercise the intended working set. Ring allocation and graph padding are
-bounded by `max_input_sets` (65,536) and `max_ring_bytes` (8 GiB); exceeding the initial ring limits
-fails clearly. If graph padding would exceed a ring limit, final benchmarking uses direct events
-with per-call reset instead. Reports include the ring footprint and allocation size.
-
-Pilot groups (eight variants by default) enqueue 100 L2 zeroing operations, then interleave three
-single-launch event trials per variant, rotating inputs without intermediate cache flushes.
-Synchronize once, take minima, and validate proposed new bests before using them for pruning. All
-pilot groups finish before survivors are regrouped. Refinement uses up to
-`min(250, ceil(1_000 / pilot_us))` launches per variant when at least ten are required, returning
-each minimum. Reset runs outside timed intervals. Refined pruning uses a validated best; every
-survivor passes the optional evaluator before final timing. Without an evaluator correctness is
-assumed.
-
-Final timing handles one configuration at a time. Set
-`Z = max(1, min(100, floor(1_000 / refined_us)))`. For `Z >= 10`, capture Z calls per graph and
-measure `ceil(25_000 / (Z * refined_us))` replays. Cycle distinct graphs spanning the ring because
-CUDA graphs fix input pointers. Pad to whole graphs so every captured call uses a distinct slot
-within its graph; this also allows resets outside replay timing. Return the minimum event duration
-divided by Z. For `Z < 10`, use direct events for `max(25, ceil(25_000 / refined_us))` launches.
-Both paths begin with 100 L2 flushes; final results include their trials and timing method.
-
-Initial shards report all candidates and their final timings. Client reduction applies refined
-pruning against the global best, then schedules only surviving configurations for additional
-final-only measurements. Every completed replica must report a different physical GPU UUID. The
-initial measurement counts toward `replication_factor` (three by default); final ranking uses the
-arithmetic mean. After each replica shard completes, partial means are reduced and pruned again;
-this is a heuristic, and partial results are never selected as completed winners. Replication is
-also re-evaluated for correctness on each device.
-
-The public vFunc scheduler selects a GPU model but has no device-exclusion field. Replica Calls
-therefore reserve `replication_factor` GPUs on one worker and measure their distinct device UUIDs
-separately. Devices already represented in that candidate's measurements are skipped. This avoids
-repeatedly scheduling single-GPU retries onto the same available device. Each final-only shard
-requires that many free GPUs on one worker; current GB300 trays have four GPUs, so higher
-replication factors require a worker with more GPUs. Calls are bounded by the normal capacity
-deadline and `replication_max_attempts`. Failed capacity or lack of enough distinct devices raises
-`TritonBenchmarkError` with retained reports and Call IDs. Generic single-device dispatch also
-verifies identities and never counts duplicate UUID placements as independent replicas.
-
-`quick_benchmark_variants_per_job` defaults to 256 and GPU concurrency to four; these are
-configurable batching limits. All phases reuse existing App/Image/ Function settings and
-CPU-prepared artifacts; no service deployment is required.
-
-### Benchmark a selected kernel configuration
-
-`benchmark` accepts vFunc-managed launch handles (`Kernel`, currently `TritonKernel`). It autotunes
-an uncached specialization before measuring its selected configuration. A cached specialization
-reuses its compiler artifacts and configuration, then obtains fresh timings. Benchmarking leaves the
-caller's tensors unchanged and inherits the kernel's optional correctness evaluator and native
-reset/restore declarations.
-
-```python
-options = vfunc.KernelBenchmark(
-    estimate_trials=3,
-    final_duration_ms=25.0,
-    min_final_trials=25,
-    max_final_trials=1000,
-    graph_duration_ms=1.0,
-    min_calls_per_graph=10,
-    max_calls_per_graph=100,
-    l2_flush_iterations=100,
-    replication_factor=3,
-    replication_max_attempts=8,
-    max_concurrent_jobs=4,
-    max_input_sets=65536,
-    max_ring_bytes=8 * 1024**3,
-)
-with app.function(gpu="gb300"):
-    cold = vfunc.benchmark(kernel[grid], a, b, out, M=m, N=n, K=k, options=options)
-    warm = vfunc.benchmark(kernel[grid], a, b, out, M=m, N=n, K=k, options=options)
-print(warm["runtime_us"])           # Arithmetic mean of distinct GPU minima
-print(warm["replicas"])             # GPU UUIDs, timings, trials, evaluation, Call IDs
-print(warm["reused_specialization"]) # True: no repeat compilation or autotuning
-```
-
-Each new benchmark checks that the compiled kernel launches without error, optionally evaluates it
-on scratch inputs, and estimates duration with `estimate_trials` rotating-input event measurements.
-It uses the final autotuning phase: CUDA graphs for short kernels, direct events for longer kernels
-or when graph padding would exceed memory limits. Estimates size the graph and trial counts; the
-final duration is an estimated compute budget, rather than a wall-time deadline. `max_final_trials`
-counts graph replays or individual direct calls. Standalone replication reserves all R GPUs in one
-job. The job verifies and restores the selected configuration once, then estimates and measures it
-on each GPU separately. Physical GPU UUIDs must be distinct. No configuration pruning is needed. The
-selected compiler shard remains a compressed batch: its archive is scanned, but only the winner's
-cache files are restored. Other compiler shards are not requested. The concurrency setting does not
-parallelize devices within this job.
-
-The returned report is immutable and includes `runtime_us`, `configuration`, `replicas`,
-`specialization`, `autotuned`, `reused_specialization`, raw shard reports and benchmarking Call IDs.
-Fresh benchmark results do not overwrite the original autotuning report in `kernel.tuning_results`.
-
-See [the complete matmul example](examples/triton_matmul_benchmark.py) for 1,024 configuration
-combinations, all tuning/benchmark options, and both cache paths.
-
-Managed kernel launches probe the selected GPU before they use a compiled cache. The probe Call
-identifies the image digest and CPU architecture. Compilation, tuning, and execution then use that
-digest and the same hardware requirements. CPU compilation does not reserve a GPU. A changed image
-alias or hardware target gets a separate cache entry. This check also runs for a cached launch and
-adds one probe Call; it does not repeat compilation or tuning when the inputs match.
-
-### Meta TLX kernels
-
-`TLXKernel` accepts Meta TLX kernels authored with `@triton.jit`, optionally wrapped in vanilla
-`@triton.autotune`. It inherits the `TritonKernel` constructor, compiler sharding, tuning controls,
-tensor transport, native reset/restore, replicated benchmarking and immutable specialization
-reports.
-
-Install the same pinned TLX-enabled Triton in the client and the selected image. Meta's distribution
-is named `fbtriton`, while its import remains `triton`:
-
-```sh
-pip uninstall -y triton
-pip install fbtriton==3.7.4
-```
-
-Use the existing App/Image/Function configuration:
-
-```python
-import gfaas as vfunc
-
-kernel = vfunc.TLXKernel(
-    native_tlx_kernel,
-    variants_per_job=None,
-    max_concurrent_jobs=8,
-    cache_compression_level=1,
-    tuning=vfunc.TritonTuning(evaluate=evaluate, replication_factor=3),
-)
-app = vfunc.App("tlx-example", image=vfunc.Image("your-tlx-enabled-image"))
-with app.function(gpu="gb300"):
-    measured = vfunc.benchmark(kernel[grid], *inputs, **kwargs)
-    cached = vfunc.benchmark(kernel[grid], *inputs, **kwargs)
-    kernel[grid](*inputs, **kwargs)  # Returns None; applies tensor writes.
-
-print(cached["runtime_us"], cached["replicas"])
-print(kernel.tuning_results[measured["specialization"]])
-```
-
-All `TritonTuning`, `TritonBenchmark`, `TritonPruning` and `KernelBenchmark` options apply
-unchanged. A missing client TLX installation fails before work is submitted. Kernel source bundles
-include the TLX import, so an incompatible remote runtime fails explicitly. TLX primitive imports
-and JIT helper dependencies are reconstructed without importing the user's entire module remotely.
-
-The same supported argument contract applies: tensors, scalars and literal constexpr values. Host
-tensor descriptors, arbitrary host objects and custom callbacks/pruning modifiers are unsupported.
-Create descriptors and shared-memory layouts inside the JIT kernel where possible. Feature/hardware
-compatibility still depends on the pinned Meta compiler release.
-
-`examples/tlx_kernels.py` provides warp-specialized dual addition, shared-memory row reduction, and
-shared-memory matmul, including correctness evaluators.
-
-### Gluon kernels
-
-`GluonKernel` supports `@gluon.jit` kernels and vanilla `@triton.autotune` wrappers around them. It
-shares `TritonKernel`'s CPU compilation shards, input snapshots, reset/restore declarations,
-replicated tuning, specialization cache, tensor writeback and standalone benchmark API. Triton's
-native autotuner is not executed.
-
-```python
-from triton.experimental import gluon
-from triton.experimental.gluon import language as gl
-
-@gluon.jit
-def copy(X, Y, N: gl.constexpr, BLOCK: gl.constexpr):
-    offsets = gl.program_id(0) * BLOCK + gl.arange(
-        0, BLOCK, layout=gl.BlockedLayout([1], [32], [4], [0])
-    )
-    gl.store(Y + offsets, gl.load(X + offsets, offsets < N, other=0), offsets < N)
-
-kernel = vfunc.GluonKernel(
-    copy,
-    tuning=None,
-    variants_per_job=None,
-    max_concurrent_jobs=8,
-    cache_compression_level=1,
-)
-with app.function(gpu="gb300"):
-    report = vfunc.benchmark(
-        kernel[(triton.cdiv(n, 256),)], x, y, N=n, BLOCK=256,
-        options=vfunc.KernelBenchmark(replication_factor=3),
-    )
-    kernel[(triton.cdiv(n, 256),)](x, y, N=n, BLOCK=256)
-```
-
-`TritonTuning`, `TritonPruning`, `TritonBenchmark` and `KernelBenchmark` retain the same options and
-defaults for Gluon. Multi-configuration wrappers enable default tuning when `tuning` is omitted.
-Ordinary calls return `None` and apply writes to the supplied tensors. Benchmarking preserves those
-tensors and returns an immutable report. Reports remain keyed by specialization in
-`kernel.tuning_results`.
-
-The selected image and client must provide matching Triton versions with Gluon support. CPU
-compilation and GPU preparation select the Gluon AST source; the adapter probes the public export
-first and uses the runtime module on releases such as Triton 3.8. See Triton's
-[Gluon runtime API](https://triton-lang.org/main/gluon/api/runtime.html). Source bundles preserve
-Gluon JIT helpers and imports of layout constructors. Create layouts inside device code; non-scalar
-constexpr arguments, host-side tensor descriptors, arbitrary callbacks, and non-vanilla autotuning
-modifiers remain unsupported.
-
-[Runnable Gluon examples](examples/gluon_kernels.py) cover strided copy, accumulating add with
-`reset_to_zero`, and row softmax. Each example compiles, benchmarks on three distinct GPUs,
-benchmarks the cached specialization again, and executes the selected kernel with tensor writeback.
-
-Gluon qualification on GB300 with Triton 3.8.0 and PyTorch 2.14.0 passed for all three examples: one
-strided-copy configuration, three accumulating-add configurations and three softmax configurations.
-Fresh and cached benchmarks used R=3 with verified distinct GPU UUIDs, preserved the caller's
-tensors, and were followed by successful execution with tensor writeback. Cached replicated means
-were approximately 2.257 us, 1.814 us and 2.134 us respectively. These measurements qualify the
-examples, not general performance across Gluon kernels.
-
-### Helion kernels
-
-`HelionKernel` accepts a native `@helion.kernel` using Helion's Triton backend. It retains ordinary
-call syntax and returns the actual Helion return value, including nested tensor outputs and storage
-aliases. Writes to supplied tensors are applied to the existing client objects. CPU inputs are
-supported; new outputs return to the first input tensor's client device.
-
-```python
-import helion
-import helion.language as hl
-import torch
-import gfaas as vfunc
-
-@helion.kernel(configs=[helion.Config(block_sizes=[n]) for n in (64, 128, 256)])
-def add(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    out = torch.empty_like(x)
-    for tile in hl.tile(x.size(0)):
-        out[tile] = x[tile] + y[tile]
-    return out
-
-def evaluate(candidate, x, y):
-    return bool(torch.equal(candidate(x, y), x+y))
-
-kernel = vfunc.HelionKernel(
-    add,
-    tuning=vfunc.KernelTuning(evaluate=evaluate, replication_factor=3),
-    variants_per_job=16,
-    max_concurrent_jobs=8,
-    cache_compression_level=1,
-)
-with app.function(gpu="gb300"):
-    out = kernel(x, y)
-    measured = vfunc.benchmark(kernel, x, y, options=vfunc.KernelBenchmark())
-print(measured["runtime_us"], measured["configuration"], measured["replicas"])
-print(kernel.tuning_results)
-```
-
-The image must contain matching Helion/PyTorch/Triton versions. Image, hardware, resources, capacity
-wait and timeout come from the existing `app.function` context. The client does not need a local
-GPU.
-
-The pipeline binds on the selected GPU and intercepts every generated device launch, then compiles
-the emitted Triton kernels in bounded parallel CPU jobs. GPU measurement loads these binaries and
-verifies that loading did not recompile them. vFunc uses its own interleaved pilot, refinement,
-pruning, correctness checks, final CUDA graph/direct ring measurements and distinct-GPU replication.
-It does not run Helion's autotuner. Mutated input storages are detected during warmup and restored
-from the host snapshot before timed reuse. Compiled configurations containing several device
-launches remain one candidate and are measured as a complete call.
-
-`configs=` optionally overrides the native decorator's configurations. Duplicates are removed. When
-neither supplies configurations, vFunc compiles Helion's bound default configuration; it does not
-implicitly explore Helion's full search space. Native Helion autotuning effort/search settings do
-not configure vFunc's tuning algorithm.
-
-`KernelTuning`, `KernelPruning`, and `KernelTiming` are shared aliases for the existing
-`TritonTuning`, `TritonPruning`, and `TritonBenchmark` controls, with identical defaults. The
-standalone `KernelBenchmark` controls above also apply to Helion. A cold benchmark
-prepares/compiles/tunes, then measures the winner; a cached benchmark restores only the winner's
-device-launch caches and measures all replicas in one job. Benchmark reports and tuning reports are
-immutable; fresh measurements leave original inputs and the saved tuning report unchanged.
-
-This implementation accepts flat tensor/scalar arguments, fixed configuration lists, and the Triton
-backend. Custom specialization callbacks and closures are rejected. The adapter to Helion's
-generated `_launcher` parameter is capability-checked; an unrecognized generated launcher fails
-explicitly. See `examples/helion_kernels.py` for vector addition, row reduction, BF16 matmul,
-in-place mutation, and a grid-barrier function returning both intermediate and reduced tensors.
-
-### CUDA C++ kernels
-
-`CUDAKernel` implements the same managed `Kernel` interface as `TritonKernel`. It compiles CUDA C++
-to cubins on CPU jobs, tunes configurations with vFunc's benchmark pipeline, and executes the
-selected kernel on the original arguments. The environment and GPU target come from
-`app.function(...)`.
-
-```python
-source = r'''
-extern "C" __global__ void add(const float* a, const float* b, float* out, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) out[i] = a[i] + b[i];
-}
-'''
-
-def grid(meta):
-    return ((meta["n"] + meta["block"][0] - 1) // meta["block"][0],)
-
-def evaluate(candidate, a, b, out, n):
-    expected = a + b
-    candidate(a, b, out, n)
-    return bool(torch.allclose(out, expected))
-
-kernel = vfunc.CUDAKernel(
-    source,
-    name="add",
-    signature={"a": "pointer", "b": "pointer", "out": "pointer", "n": "int32"},
-    configs=[vfunc.CUDAConfig(block=(128,)), vfunc.CUDAConfig(block=(256,))],
-    tuning=vfunc.KernelTuning(evaluate=evaluate, replication_factor=3),
-)
-with app.function(gpu="gb300"):
-    cold = vfunc.benchmark(kernel[grid], a, b, out, n)
-    warm = vfunc.benchmark(kernel[grid], a, b, out, n)
-    kernel[grid](a, b, out, n)  # Returns None, preserves writes and client aliases.
-```
-
-The signature specifies ordered argument names and exact ABI types: `pointer`, `int32`, `uint32`,
-`int64`, `uint64`, `float32`, or `float64`. It must match the C++ entry point. Pointer arguments
-accept tensors or `None`; tensor element dtypes must match the C++ pointer types. CPU tensors work
-through the existing storage transport. Strides and offsets are preserved; pass stride arguments
-explicitly when your kernel needs them. Struct arguments and host launch wrappers are not supported;
-provide an `extern "C" __global__` entry point.
-
-`CUDAConfig(block=(256,), defines={"TILE": 128}, shared_memory=0)` specifies threads per block,
-numeric `nvcc -D` definitions, and dynamic shared-memory bytes. The grid callback receives argument
-values, defines, and the selected `block`. `CUDAKernel` also exposes `nvcc_flags=()`,
-`variants_per_job=128`, and `max_concurrent_jobs=8`. The image must contain nvcc and PyTorch; the
-client needs PyTorch but does not require a GPU, CUDA toolkit or Triton installation.
-
-`reset_to_zero=("out",)` and `restore_value=("input",)` operate before timed reuse, using the
-canonical host snapshot. They govern benchmarking, not ordinary execution. Input rings retain
-aliasing and are subject to the same count/byte limits as Triton kernels. Omitting `tuning` uses the
-normal policy for multiple configurations; a single configuration compiles and executes without
-tuning.
-
-`KernelTuning`, `BenchmarkSettings` and `Pruning` are shared-policy aliases for `TritonTuning`,
-`TritonBenchmark` and `TritonPruning`. All pilot/refinement pruning, trial counts, durations,
-grouping, replication and ring limits are available. Standalone `vfunc.benchmark` uses
-`KernelBenchmark` and freshly measures the cached winner in one replicated job, loading only its
-binary from the compiler shard. Reports are immutable and stored in `kernel.tuning_results` by
-specialization.
-
-For controllers that separate compilation from execution, `kernel.compile()` compiles every declared
-configuration without tensor inputs or autotuning. Call it inside `app.function(...)`; it returns
-the GPU target, per-configuration results, compiler Call IDs, and artifact references. These
-artifacts can be retained and loaded by a separate GPU job.
-
-The full example in `examples/cuda_kernel.py` exercises aliasing, strided reset/restore, matrix
-multiplication, rejected compilation and rejected accuracy. Replication requires enough free GPUs on
-one worker. A poisoned CUDA process still fails its Call; durable restart/checkpoint recovery
-remains follow-up work.
-
-### ThunderKittens kernels
-
-`ThunderKittensKernel` compiles ThunderKittens CUDA C++ configurations on CPU workers, then uses the
-same correctness checks, pruning, input rings, CUDA graph measurement and distinct-GPU replication
-as `TritonKernel`. It inherits the image, GPU target and resources selected in `app.function(...)`;
-it does not introduce another environment configuration.
-
-```python
-kernel = vfunc.ThunderKittensKernel(
-    source,                       # CUDA C++ source, including kittens.cuh
-    "launch",                     # extern "C" host launcher
-    signature={"A": "pointer", "B": "pointer", "C": "pointer", "N": "int32"},
-    headers="/path/to/ThunderKittens/include",
-    configs=[
-        vfunc.ThunderKittensConfig({"TILE": 64}, block=(64,)),
-        vfunc.ThunderKittensConfig({"TILE": 128}, block=(128,)),
-    ],
-    tuning=vfunc.TritonTuning(evaluate=evaluate, replication_factor=3),
-    reset_to_zero=("C",),
-)
-with app.function(gpu="gb300"):
-    result = vfunc.benchmark(kernel[grid], a, b, c, a.numel())
-    # The same specialization reuses its compiled winner without repeating tuning.
-    cached = vfunc.benchmark(kernel[grid], a, b, c, a.numel())
-    kernel[grid](a, b, c, a.numel())   # Executes and writes back into c.
-
-print(cached["runtime_us"], cached["configuration"], cached["replicas"])
-print(kernel.tuning_results)
-```
-
-The existing `TritonTuning`, `TritonPruning`, `TritonBenchmark` and `KernelBenchmark` policy classes
-are shared by both implementations. Every pruning, trial count/duration, grouping, concurrency,
-replication and ring limit remains configurable. One configuration runs without tuning by default;
-multiple configurations enable the default tuning policy. The evaluator is optional.
-
-#### CUDA entry points
-
-The default `entrypoint_kind="launcher"` expects an exported host launcher returning `int` or
-`cudaError_t`, where zero means success. Its parameters match the declared signature, followed by
-`VFUNC_LAUNCH_ARGS`. The compiler supplies:
-
-```cpp
-extern "C" int launch(float* x, int n, VFUNC_LAUNCH_ARGS) {
-    // Construct native ThunderKittens global layouts/TMA descriptors here.
-    native_kernel<<<VFUNC_GRID, VFUNC_BLOCK, VFUNC_SHARED_BYTES, VFUNC_STREAM>>>(...);
-    return static_cast<int>(cudaGetLastError());
-}
-```
-
-`VFUNC_LAUNCH_ARGS` adds seven unsigned integers (grid x/y/z, block x/y/z, dynamic shared-memory
-bytes) and `cudaStream_t`. Use the supplied stream so measurements and CUDA graph capture observe
-the launch. The grid callable receives a dictionary containing the bound runtime arguments,
-configuration macros, and `block`. Host launchers can preserve native descriptor construction and
-custom launch setup without needing PyTorch C++ bindings.
-
-Alternatively, `entrypoint_kind="kernel"` accepts an unmangled `extern "C" __global__ void` entry
-point and launches its cubin directly through the CUDA Driver API. This mode has no extra
-parameters. Struct arguments and arbitrary Python/C++ return objects are not transported; flatten
-arguments into tensor pointers and supported scalar values or construct structs in a host launcher.
-
-Signatures preserve argument order and accept `pointer`, `int32`, `uint32`, `int64`, `uint64`,
-`float32` and `float64`. CUDA compilation checks the exported entry point's ABI against this
-declaration before any GPU runs. Pointer values must be tensors or `None`; CUDA source authors are
-responsible for using the correct tensor dtype and layout. Ordinary launches return `None` and
-preserve client tensor identity, strides, aliases and writes. Benchmarks leave client values
-unchanged.
-
-#### Configuration and provenance
-
-`ThunderKittensConfig(defines={}, block=(128,), shared_memory=0)` supplies numeric compile-time
-macros, a one-to-three-dimensional CUDA block, and dynamic shared-memory bytes. The discovered GPU
-selects the ThunderKittens architecture macro. Configuration macros cannot override `KITTENS_*`.
-
-The constructor snapshots the supplied include directory into one immutable, SHA-256-verified header
-artifact. Source, headers, flags, configurations, input metadata, callbacks and image identity
-participate in specialization caching; changing local header files later does not change an existing
-wrapper.
-
-Compilation is sharded with `variants_per_job=16` and `max_concurrent_jobs=8` by default, with up to
-four compiler processes per job. `nvcc_flags=()` accepts additional flags while vFunc manages output
-mode and target architecture. The selected image must include nvcc, a C++20 host compiler, CUDA
-headers and compatible PyTorch. NVIDIA's pip-distributed nvcc is supported even when it is absent
-from PATH. No Triton installation is required on the client.
-
-Cached execution and standalone benchmarking retain only the winning compiler shard and load only
-the selected binary. Standalone R-GPU measurements use one job and load binary bytes once before
-measuring each GPU. The existing scheduler requires those R GPU slots on one worker. Input
-reset/restore remains per GPU.
-
-`reset_to_zero` and `restore_value` specify pointer argument names. `restore_value` is needed for
-inputs mutated by a kernel when every benchmarked invocation must see the original values; it is
-applied outside timed regions. Normal execution uses the values supplied by the caller and copies
-all tensor writes back. CUDA context poisoning still fails the worker Call; durable
-checkpoint/restart is not implemented.
-
-See `examples/thunderkittens_kernels.py` for complete vector-add, in-place exp, BF16 matmul and raw
-CUDA definitions, correctness callbacks, launchers and configuration sets.
-
-### C++ CUTLASS kernels
-
-`CutlassKernel` wraps C++ source defining `vfunc_launch`. Each configuration is a mapping of
-preprocessor definitions (prefix names to avoid collisions with CUTLASS headers): CPU jobs build one
-shared library per configuration. The active `app.function` supplies the image, GPU pool, resource
-budgets and timeouts, as it does for `TritonKernel`.
-
-```python
-kernel = vfunc.CutlassKernel(
-    source,
-    argument_names=("a", "b", "out"),
-    configurations=[
-        {"VF_TILE_M": 64, "VF_TILE_N": 64, "VF_STAGES": 2},
-        {"VF_TILE_M": 128, "VF_TILE_N": 64, "VF_STAGES": 3},
-    ],
-    tuning=vfunc.CutlassTuning(evaluate=evaluate, replication_factor=3),
-    include_dirs=("/opt/cutlass/include", "/opt/cutlass/tools/util/include"),
-    nvcc_flags=(),
-    architecture=None,          # Default: actual GPU's sm_ target.
-    headers=None,               # Optional tar archive ArtifactRef.
-    reset_to_zero=(),
-    restore_value=(),
-    variants_per_job=None,      # Automatic division across compiler jobs.
-    max_concurrent_jobs=8,
-)
-with app.function(gpu="gb300", timeout=600, capacity_wait=600):
-    cold = vfunc.benchmark(kernel, a, b, out)  # Compile + tune + benchmark.
-    warm = vfunc.benchmark(kernel, a, b, out)  # Benchmark cached winner.
-    kernel(a, b, out)                          # Execute and apply writes.
-```
-
-`CutlassTuning` has the same fields/defaults as `TritonTuning`: independent pilot/refined pruning
-policies, optional evaluator, grouping/concurrency, replication, input-ring limits and a
-`TritonBenchmark` timing policy. Standalone measurements accept the same `KernelBenchmark` controls.
-Reports are immutable, stored by specialization in `kernel.tuning_results`, and contain
-configurations, compiler diagnostics, per-GPU timings, numerical verdicts and Call IDs. Cache keys
-include source, configurations, tensor metadata, image, environment, GPU pool, header identity,
-compiler options, reset/restore declarations and evaluator.
-
-The image must contain nvcc, a host C++ compiler, CUDA runtime libraries and PyTorch. CUTLASS
-headers can be provided by immutable image include directories, or by `headers=ArtifactRef(...)`
-referencing a tar archive containing `include/` and optionally `tools/util/include/`. Archive
-revision selection belongs to the caller; it is not downloaded or changed during a kernel call.
-`architecture` can select an architecture-specific target such as `sm_103a`, provided its numeric
-architecture matches the assigned GPU. A single configuration compiles and executes without tuning
-unless a tuning policy is explicitly supplied.
-
-#### C++ launch contract
-
-The compiler prepends this ABI declaration to the source (do not redefine it):
-
-```cpp
-struct VFuncArgument {
-    int32_t kind, dtype;
-    void* data;
-    int64_t ndim;
-    const int64_t* shape;
-    const int64_t* strides;
-    int64_t i64;
-    double f64;
-};
-extern "C" int vfunc_launch(
-    const VFuncArgument* args, int64_t count, cudaStream_t stream);
-```
-
-Arguments follow `argument_names` order, including keyword arguments. `kind` is 0 for None, 1 for a
-tensor, 2 for int64, 3 for float64 and 4 for bool. Tensor `data` addresses its first element,
-including storage offset. Shapes and strides are int64; strides count elements. Scalar values use
-`i64` or `f64`. Dtype codes are 1=float32, 2=float16, 3=bfloat16, 4=float64, 5=int8, 6=uint8,
-7=int16, 8=int32, 9=int64 and 10=bool. Additional codes are 11=float8_e4m3fn, 12=float8_e5m2,
-13=float8_e4m3fnuz, 14=float8_e5m2fnuz, 15=uint16, 16=uint32, 17=uint64, 18=complex64,
-19=complex128, 20=complex32, 21=float8_e8m0fnu and 22=float4_e2m1fn_x2, when supported by the
-installed PyTorch. These codes describe raw storage; the launcher chooses the corresponding C++
-interpretation.
-
-The launcher validates its expected dtype/layout, launches its CUTLASS operator on the supplied
-current CUDA stream, and returns zero on success. It must consume host metadata before returning;
-the arrays are temporary. Launch geometry and CUTLASS workspace handling belong in the C++ launcher
-(workspace tensors can be supplied as ordinary arguments). Graph benchmarking requires a
-capture-compatible launcher. During tuning, a nonzero launch status rejects that variant after a
-healthy synchronization check; a CUDA synchronization fault terminates the job. An ordinary
-selected-kernel call propagates a nonzero launch status.
-
-The wrapper preserves tensor views, storage aliases and client object identity. Benchmark calls
-measure scratch copies and leave client tensors unchanged; ordinary calls return None and apply all
-tensor writes. If repeated calls require zeroing outputs or restoring mutated inputs, declare their
-names in `reset_to_zero` or `restore_value`; restore uses the canonical host snapshot, without
-per-ring-slot device backups. GPU failures retain shard evidence but do not yet support automatic
-restart after a poisoned CUDA context.
-
-See `examples/cutlass_kernel.py` and `examples/cutlass/gemm.cu` for a BF16 GEMM example, and
-`examples/cutlass/vector_add.cu` for strided CuTe C++ tensor access. The Python CuTe DSL is a
-separate frontend and is not accepted by this C++ class.
-
-Qualification used CUTLASS v4.8.0, CUDA 13.0.88 and three GB300 GPUs per benchmark. FP32/BF16 GEMM,
-strided vector addition with aliased output, and FP8 vector inputs with a scalar argument passed
-compilation, tuning, cold and cached benchmarking, and execution. The strided sample rejected an
-intentionally incorrect configuration. These samples establish the launcher and measurement path;
-other CUTLASS operators still need compatible C++ launchers.
-
-## CuTe DSL kernels
-
-`CuteDSLKernel` implements the same managed compilation, tuning, replicated benchmarking,
-specialization cache and tensor-write contract as `TritonKernel`. It wraps the **`@cute.jit` host
-entry point** that launches device kernels. CuTe host entries define their own launch grid, so call
-the wrapper directly:
-
-```python
-kernel = vfunc.CuteDSLKernel(
-    add_one,
-    configurations=[{"BLOCK": 64}, {"BLOCK": 128}, {"BLOCK": 256}],
-    tuning=vfunc.KernelTuning(evaluate=evaluate_add, replication_factor=3),
-    variants_per_job=2,
-    max_concurrent_jobs=2,
-)
-with app.function(gpu="gb300", timeout=600, capacity_wait=300):
-    cold = vfunc.benchmark(kernel, a, b)  # Compile/tune, then fresh R=3 measurement.
-    warm = vfunc.benchmark(kernel, a, b)  # Fresh measurement of the saved winner.
-    kernel(a, b)                        # Execute once and apply writes to b.
-print(warm["runtime_us"], warm["configuration"]["constants"])
-```
-
-Services that receive kernel source can construct a wrapper without importing that source in the
-client process:
-
-```python
-kernel = vfunc.CuteDSLKernel.from_source(
-    source,
-    entrypoint="kernel_entry",
-    cute_version="4.8.0",
-    configurations=[{"BLOCK": 64}, {"BLOCK": 128}],
-    tuning=vfunc.KernelTuning(evaluate=evaluate_add, replication_factor=3),
-)
-```
-
-`from_source` parses the host signature without executing the module. Host parameters must have
-explicit names and literal defaults. The module executes only in remote compilation/execution jobs.
-`cute_version` declares the expected version in the selected application image; the GPU probe
-verifies it before compilation. This entry point does not require CuTe installed in the client.
-
-For the callable entry point, install the **same `nvidia-cutlass-dsl` version** in the client and
-the selected vFunc image. Images also need PyTorch, CUDA bindings and CuTe's runtime libraries. No
-package installation occurs implicitly in the SDK. App/Function image, resource, target, timeout and
-environment settings apply normally.
-
-`KernelTuning`, `KernelPruning` and `KernelTiming` are shared aliases of `TritonTuning`,
-`TritonPruning` and `TritonBenchmark`; all existing controls and defaults apply. Standalone
-measurements use `KernelBenchmark`. `kernel.tuning_results` holds immutable reports by
-specialization. Benchmarking preserves client tensors and the original tuning report. Ordinary calls
-return `None` and preserve writes to the original tensors, including aliased views.
-
-### CuTe-specific controls
-
-- `configurations`: nonempty list of literal mappings naming `cutlass.Constexpr` parameters on the
-  host entry. Scalar values and nested tuples/lists (such as tile shapes) are supported. Defaults to
-  `[{}]`. Multiple configurations enable vFunc tuning automatically.
-- `tuning`: shared `KernelTuning`, including an optional accuracy evaluator.
-- `variants_per_job`: configurations per CPU job; `None` distributes the search across at most
-  `max_concurrent_jobs` jobs.
-- `max_concurrent_jobs`: maximum simultaneous CPU compiler jobs, default 8.
-- `compile_options`: CuTe's public compilation option string, default empty. vFunc manages GPU
-  target and the object ABI. Target and ABI overrides are rejected.
-- `reset_to_zero` / `restore_value`: argument names requiring reset/restore before benchmark reuse.
-  Defaults to empty tuples. Actual execution uses the supplied values. Restores use canonical host
-  snapshots rather than extra GPU backups.
-
-A typed `stream: cuda.CUstream` parameter is injected using the worker's current PyTorch stream;
-callers omit it. This enables event timing and CUDA graph capture on the correct stream. Entries
-without that parameter use direct-event final measurements. Source and helper definitions are
-bundled without importing the user's entire script. Callable classes with literal/type state are
-also supported; construct more complex DSL state inside the host entry or a bundled helper.
-
-CPU workers compile from fake tensor descriptors, preserving shapes, strides and dtypes without
-allocating GPU inputs. They export independent object files using CuTe's public AOT API. GPU workers
-verify and load only requested objects, then reuse the shared input-ring and measurement pipeline.
-Compilations use isolated processes to avoid sharing CuTe's compiler state between configurations.
-Standalone benchmarks request only the winning compiler shard and measure all assigned replicas in
-one GPU job, verifying the selected object files once.
-
-See `examples/cute_kernel.py` for the full client example and `examples/cute_kernels.py` for vector
-addition, a callable class performing strided copy, and a small reference-style matmul.
-
-The tensor/scalar transport restrictions of `TritonKernel` still apply. Arbitrary Python objects,
-device-entry-only functions, non-literal configuration objects and host return values are outside
-this launch contract. Compile failures are retained per variant; poisoned GPU processes fail with
-retained Call evidence. Replication uses the existing verified-distinct-GPU scheme and placement
-limits.
+Some kernel tests require PyTorch and skip without it. CI installs CPU PyTorch to run those tests.
+Remote GPU tests require a suitable image, service access, and explicit authorization to consume
+capacity.
+
+For API changes, update the relevant reference and user chapter in the same PR. Keep complete
+examples import-safe and distinguish executable examples from fragments. Use simple English and
+format Markdown with `dprint fmt` before committing. The documentation check builds a clean book,
+checks local links and anchors, and parses Python snippets without submitting remote work.

@@ -19,7 +19,7 @@ import gfaas
 image = gfaas.Image.from_registry("cuda-nvcc")
 app = gfaas.App("kernel-wrapper", image=image)
 
-@app.function(gpu="any", gpu_type="gb300", timeout=600)
+@app.function(gpu_count=1, gpu_type="gb300", timeout=600)
 def compile_variant(source: str, flags: list[str]) -> dict:
     from gfaas.cuda_runner import run
     return run(source=source, nvcc_flags=flags)
@@ -137,7 +137,7 @@ if __name__ == "__main__":
                 image="cuda-nvcc",
                 function=compile_variant,
                 args=(source, [optimization]),
-                gpu="any",
+                gpu_count=1,
                 gpu_type="gb300",
                 timeout_s=600,
                 app_name="kernel-batch",
@@ -167,3 +167,33 @@ if __name__ == "__main__":
 ```
 
 The local call does not use the gfaas service. This example needs local CUDA tools and a local GPU.
+
+## Function scopes
+
+`app.function()` also acts as a context manager. It supplies configuration for
+[managed kernels](kernels/index.md) and for decorators created inside the block. The block itself
+executes on the client. Entering it does not move arbitrary Python statements to a worker.
+
+```python
+import gfaas
+
+with gfaas.Client() as client:
+    app = gfaas.App("experiments", image=gfaas.Image("YOUR_IMAGE"), client=client)
+    with app.function(gpu_count=1, gpu_type="YOUR_POOL", timeout=600):
+        with app.function(memory_bytes=8 * 1024**3):
+            # Kernel launches here use the outer GPU selection and this memory limit.
+            pass
+```
+
+Nested scopes on the same App inherit omitted settings. An explicit value replaces the inherited
+value. `env` mappings replace the whole inherited mapping; they do not merge individual keys. For
+optional fields, `None` clears the inherited override. Fields such as `timeout` still require a
+valid value. An image override of `None` falls back to the App image.
+
+Scopes restore the previous settings on exit, including after an exception. They use Python context
+variables to separate active settings between tasks and threads. A decorated Function captures its
+settings when the decorator binds it. A kernel launch uses the active scope at invocation.
+
+The App creates a client lazily when you do not supply one. For explicit connection ownership, pass
+a `Client` in a `with` block as above. Leaving a function scope does not close that client or cancel
+its remote Calls.

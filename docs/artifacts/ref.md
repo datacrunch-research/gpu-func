@@ -8,7 +8,8 @@ Call and preserves the reference in the arguments.
 This example uploads a text file, reads it in a function, and removes it after the Call reaches a
 terminal state.
 
-The example uses the verified `cuda-nvcc` prepared image.
+The example uses the registered `cuda-nvcc` image. Replace it with an accessible Python image if
+your service uses another name.
 
 ```python
 import os
@@ -31,22 +32,21 @@ if __name__ == "__main__":
         )
         reference = gfaas.ArtifactRef(uploaded["id"])
 
-        try:
-            call = client.submit(
-                image="cuda-nvcc",
-                function=count_lines,
-                args=(reference,),
-                gpu="any",
-                gpu_type=gpu_type,
-                app_name="artifact-example",
-            )
-            print("call:", call.call_id)
-            print(call.wait())
-        finally:
-            client.delete_artifact(uploaded["id"])
+        call = client.submit(
+            image="cuda-nvcc",
+            function=count_lines,
+            args=(reference,),
+            gpu_count=0,
+            gpu_type=gpu_type,
+            app_name="artifact-example",
+        )
+        print("call:", call.call_id)
+        print(call.wait())
+        client.delete_artifact(uploaded["id"])
 ```
 
-The function receives a local read-only file.
+The function receives a local read-only file. If submission or waiting fails, retain the Artifact
+and Call IDs until you know whether the Call still needs the input.
 
 CAUTION: Wait for the Call to reach a terminal state before you remove the Artifact. The API rejects
 removal while a nonterminal Call uses it.

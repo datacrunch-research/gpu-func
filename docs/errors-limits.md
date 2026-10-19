@@ -1,4 +1,7 @@
-# Errors and limits
+# Troubleshooting and limits
+
+For the complete exception list and retained report fields, read the
+[error reference](reference/errors.md).
 
 ## Error types
 
@@ -92,3 +95,22 @@ is a worker-side execution limit. These limits are independent.
 
 The service can apply more limits than this table shows. Ask the service operator for the limits of
 your account and GPU pool.
+
+## Common problems
+
+| Symptom                                     | What to inspect                                                                                     |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `import gfaas` fails after CLI installation | Install the SDK in the Python project's environment; a uv tool is isolated                          |
+| CUDA is unavailable in an ordinary function | Set `gpu_count=1`; selecting `gpu_type` alone does not request a GPU                                |
+| Image reference is unknown                  | Ask for an accessible registered name or digest; worker-local fallback is not supported             |
+| Call waits without starting                 | Read preparation and compatibility status, then compare requested resources with available capacity |
+| Managed benchmark waits for several GPUs    | Check both tuning and benchmark replication factors; the default is three on one worker             |
+| Kernel target probe lacks image identity    | Use a registered image and a service that reports image digest and architecture                     |
+| Result decoding fails                       | Compare Python/package versions and confirm that the returned format is supported                   |
+| Upload reaches 100% but does not return     | Read its publication phase; accepted bytes are not yet a published Artifact                         |
+| Client wait expires                         | Save the Call ID and reconnect; a local timeout does not cancel remote work                         |
+| An Artifact cannot be deleted               | Check durable references and tree membership before attempting cleanup                              |
+
+Use `vfunc call show CALL_ID` and `vfunc call logs CALL_ID` to retain the exact status and error. A
+queued Call does not prove that every GPU is busy. Preparation, hardware mismatch, missing reports,
+and other resource requirements can also delay it.

@@ -265,3 +265,27 @@ session lifetime. It does not apply the inline byte limit to the completed file 
 deletion while an Environment, Function, Call input, published result, or nonterminal Call still
 references the Artifact. The API also rejects deletion of a blob while a tree refers to it. Delete
 the tree first when you no longer need either resource.
+
+## Find Artifacts for your account
+
+`list_artifacts(after=None, limit=100)` returns one page of metadata. Pass its `next_cursor` as
+`after` for the next page. `iter_artifacts()` follows those pages for you:
+
+```python
+from gfaas import Client
+
+with Client() as client:
+    for artifact in client.iter_artifacts():
+        print(artifact["id"], artifact.get("filename"), artifact["size_bytes"])
+```
+
+The list is scoped to the principal identified by your API key. Keys with the same principal see the
+same owner-scoped Artifacts. This is not a fleet-wide operator listing.
+
+Record the IDs of data your application creates. Before cleanup, check which resources still use
+those IDs. Do not delete every listed Artifact merely because one experiment is complete. Deletion
+can fail with `artifact_in_use` when a durable resource still references the data.
+
+For a tree you own and no longer need, delete the tree before its unneeded child blobs. Retain the
+upload response's `child_artifact_ids` for that bookkeeping. Some children can still belong to other
+trees.
