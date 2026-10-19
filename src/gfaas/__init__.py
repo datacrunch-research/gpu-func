@@ -85,6 +85,9 @@ __all__ = [
     "Image",
     "RemoteResult",
     "StageArtifactBinding",
+    "CuteDSLKernel",
+    "CuteDSLCompilationError",
+    "UnsupportedCuteDSLKernelError",
     "TritonKernel",
     "TLXKernel",
     "GluonKernel",
@@ -115,6 +118,10 @@ def __getattr__(name: str):
         from .helion_compat import UnsupportedHelionKernelError
 
         return UnsupportedHelionKernelError
+    if name in {"CuteDSLKernel", "CuteDSLCompilationError", "UnsupportedCuteDSLKernelError"}:
+        from . import cute_kernel
+
+        return getattr(cute_kernel, name)
     if name in {"KernelTuning", "KernelPruning", "KernelTiming"}:
         from . import triton_policy
 
@@ -126,6 +133,7 @@ def __getattr__(name: str):
                 "KernelTiming": "TritonBenchmark",
             }[name],
         )
+
     if name in {"Client", "RemoteResult"}:
         from .client import Client, RemoteResult
 

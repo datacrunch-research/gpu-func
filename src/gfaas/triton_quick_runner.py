@@ -651,7 +651,11 @@ def final_benchmark(
         * (getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0)
         <= getattr(ring, "max_bytes", math.inf)
     )
-    if z < settings.get("min_calls_per_graph", 10) or not graph_fits:
+    if (
+        z < settings.get("min_calls_per_graph", 10)
+        or not graph_fits
+        or not getattr(candidate, "supports_cuda_graph", True)
+    ):
         count = min(
             maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
         )
@@ -755,6 +759,11 @@ def benchmark_cycle(
 
         if triton.__version__ != triton_version:
             raise RuntimeError("Benchmark Triton version differs from compilation")
+    elif backend == "cute":
+        from gfaas import cute_backend
+
+        if cute_backend.version() != triton_version:
+            raise RuntimeError("Benchmark CuTe version differs from compilation")
     elif backend != "cuda":
         raise ValueError("Unsupported kernel backend")
     torch.cuda.init()
@@ -795,6 +804,7 @@ def benchmark_cycle(
         else tempfile.TemporaryDirectory(prefix="vfunc-ring-")
     )
     with context as folder:
+        prepared: Any
         if backend == "cuda":
             from gfaas.cuda_kernel_runner import load_binaries, prepare_entries
 
@@ -808,6 +818,30 @@ def benchmark_cycle(
             pairs = prepare_entries(prepared, variants_list, kernel_name, grid, ring, reset)
             rows.extend(row for row, _ in pairs)
             entries = [(row, candidate) for row, candidate in pairs if candidate is not None]
+        elif backend == "cute":
+            prepared = (
+                prepared_cache[1]
+                if prepared_cache
+                else cute_backend.load_artifacts(
+                    artifacts, source, target, triton_version, variants_list
+                )
+            )
+            entries = []
+            for variant in variants_list:
+                row = {"id": variant["id"]}
+                rows.append(row)
+                if row["id"] not in prepared:
+                    row["status"] = "compile_failed"
+                    continue
+                candidate = cute_backend.candidate(
+                    prepared[row["id"]], variant, argument_names or []
+                )
+                row["prepared_files_unchanged"] = True
+                args, kwargs = ring.next()
+                reset(*args, **kwargs)
+                candidate(*args, **kwargs)
+                torch.cuda.synchronize()
+                entries.append((row, candidate))
         else:
             cache = Path(folder) / "cache"
             cache.mkdir(exist_ok=True)
@@ -915,6 +949,9 @@ def benchmark_replicas(*, device_count: int, **kwargs: Any) -> dict[str, Any]:
 
     if torch.cuda.device_count() < device_count:
         raise RuntimeError("Replica Call did not receive its requested GPU count")
+    if "cute_version" in kwargs:
+        kwargs["backend"] = "cute"
+        kwargs["triton_version"] = kwargs.pop("cute_version")
     reports = []
     for device in range(device_count):
         with torch.cuda.device(device):
@@ -998,18 +1035,34 @@ def benchmark_selected_replicas(*, device_count: int, **kwargs: Any) -> dict[str
 
     if torch.cuda.device_count() != device_count:
         raise RuntimeError("Benchmark Call did not receive its requested GPU count")
+    backend = kwargs.get("backend", "triton")
+    if "cute_version" in kwargs:
+        backend = kwargs["backend"] = "cute"
+        kwargs["triton_version"] = kwargs.pop("cute_version")
     selected = {v["id"] for v in json.loads(kwargs["variants"])}
     with tempfile.TemporaryDirectory(prefix="vfunc-selected-") as folder:
         cache = Path(folder) / "cache"
         cache.mkdir()
-        prepared = restore_caches(
-            kwargs["artifacts"],
-            cache,
-            kwargs["source"],
-            kwargs["target"],
-            kwargs["triton_version"],
-            selected,
-        )
+        prepared: Any
+        if backend == "cute":
+            from gfaas import cute_backend
+
+            prepared = cute_backend.load_artifacts(
+                kwargs["artifacts"],
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                json.loads(kwargs["variants"]),
+            )
+        else:
+            prepared = restore_caches(
+                kwargs["artifacts"],
+                cache,
+                kwargs["source"],
+                kwargs["target"],
+                kwargs["triton_version"],
+                selected,
+            )
         reports = []
         for device in range(device_count):
             with torch.cuda.device(device):
