@@ -1,8 +1,8 @@
 # Command-line interface
 
-The `vfunc` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA
-workflows. It also manages durable Calls and Artifacts. See [CUDA development
-workflows](cuda-workflows.md) for exercise, benchmark, sanitizer, profiler, and grading commands.
+The `vfunc` command runs Python files, CUDA files, CUDA course exercises, and custom CUDA workflows.
+It also manages durable Calls and Artifacts. See [CUDA development workflows](cuda-workflows.md) for
+exercise, benchmark, sanitizer, profiler, and grading commands.
 
 The `run` command supports one self-contained source file. It does not package a source tree or
 install local dependencies. The course and custom commands package the selected workspace.
@@ -12,17 +12,17 @@ override the suffix or to use a different suffix.
 
 The command groups have these purposes:
 
-| Command | Purpose |
-| --- | --- |
-| `vfunc run` | Submit one Python or CUDA source file. |
-| `vfunc local` | Inspect or use a CUDA GPU on the local host. |
-| `vfunc call` | Inspect, watch, or cancel a durable Call. |
-| `vfunc artifact` | Download an Artifact. |
-| `vfunc pool` | List the configured GPU pools. |
-| `vfunc completion` | Generate shell-completion setup. |
-| `vfunc custom` | Compile, run, or profile a custom CUDA program. |
-| `vfunc exercise` | Run an action for a CUDA course exercise. |
-| `vfunc report` | Inspect a local Nsight Compute report. |
+| Command            | Purpose                                         |
+| ------------------ | ----------------------------------------------- |
+| `vfunc run`        | Submit one Python or CUDA source file.          |
+| `vfunc local`      | Inspect or use a CUDA GPU on the local host.    |
+| `vfunc call`       | Inspect, watch, or cancel a durable Call.       |
+| `vfunc artifact`   | Download an Artifact.                           |
+| `vfunc pool`       | List the configured GPU pools.                  |
+| `vfunc completion` | Generate shell-completion setup.                |
+| `vfunc custom`     | Compile, run, or profile a custom CUDA program. |
+| `vfunc exercise`   | Run an action for a CUDA course exercise.       |
+| `vfunc report`     | Inspect a local Nsight Compute report.          |
 
 The top-level `compile`, `test`, `benchmark`, `sanitizer`, `profile`, and `grade` commands
 auto-detect a course exercise from the current directory.
@@ -355,7 +355,8 @@ The `run` command accepts these resource options:
 Size options accept bytes or the `KiB`, `MiB`, `GiB`, and `TiB` suffixes.
 
 If `--gpu-type` is absent, the CLI reads `GFAAS_GPU_TYPE`. If that variable is absent, the CLI uses
-the literal `any` pool.
+`any`, which allows coordinator placement across pools when the deployment enables it. Course and
+`custom` commands currently require an explicit pool when several pools are configured.
 
 ## Detach and reconnect
 
@@ -381,13 +382,13 @@ uv run vfunc call cancel "$call_id" --reason superseded
 
 The Call subcommands have these purposes:
 
-| Subcommand | Purpose |
-| --- | --- |
-| `show` | Show the current Call record. |
-| `watch` | Follow retained and new Call events. |
-| `logs` | Read retained standard output and standard error. |
-| `cancel` | Request Call cancellation. |
-| `artifacts` | List the Artifacts that the Call published. |
+| Subcommand  | Purpose                                           |
+| ----------- | ------------------------------------------------- |
+| `show`      | Show the current Call record.                     |
+| `watch`     | Follow retained and new Call events.              |
+| `logs`      | Read retained standard output and standard error. |
+| `cancel`    | Request Call cancellation.                        |
+| `artifacts` | List the Artifacts that the Call published.       |
 
 The `watch` command follows retained and new events. Use `--after CURSOR` to resume after a known
 event. The `logs` command returns retained output and then stops. Add `--follow` to wait for new

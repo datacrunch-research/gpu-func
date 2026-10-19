@@ -1,21 +1,30 @@
-# Prepared images
+# Select a registered image
 
-A prepared image is already present on the GPU machines. The machine lists it in
-`/etc/gfaas/images.json`. Select it by name:
+Use a name supplied by your operator or image publisher:
 
 ```python
-image = gfaas.Image.from_registry("cuda-nvcc")
-# or
-image = gfaas.Image("cuda-nvcc")
+import gfaas
+
+image = gfaas.Image.from_registry("research-python")
+# This form selects the same registered image.
+image = gfaas.Image("research-python")
 ```
 
-The verified fleet path in this guide uses `cuda-nvcc`. Ask your operator which prepared images the
-deployment offers.
+Names such as `cuda-nvcc` and `pytorch-cu130` in examples are deployment choices, not bundled
+images. The selected image must exist in your service and contain the packages your function
+imports.
 
-## Build-spec images
+The coordinator checks your access to the image. The image's CPU architecture also restricts
+placement. A GPU-pool name does not select an image automatically.
 
-`gfaas.Image.from_container(...)` creates a build specification. The current SDK rejects that
-specification before submission because dynamic builds are not enabled.
+A registered name can move to a newer image. Each accepted Call retains its resolved image, but a
+later Call can resolve the same name differently. Use an immutable digest for repeatable
+submissions.
 
-Use a prepared image or a remote image. Ask an operator to publish a new image when your workload
-needs more packages.
+## Additional software
+
+The SDK does not build images during submission. `Image.from_container(...)` constructs a build
+specification, but `Client.submit()` rejects it because dynamic builds are not enabled on this path.
+
+Ask an operator or publisher to provide an image with the required software. Then use its registered
+name or digest. For mixed ARM and x86 workers, supply [native image variants](hardware.md).

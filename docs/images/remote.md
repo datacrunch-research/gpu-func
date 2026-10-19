@@ -1,27 +1,28 @@
-# Remote images
+# Use an immutable image reference
 
-A remote image stores its filesystem as content-addressed objects at an object origin. Its
-descriptor identifies an image index. The index names the objects in the image.
-
-## Select a catalog image
-
-An operator catalog maps approved names to immutable remote-image descriptors. Select a catalog
-image by name:
+A published image has a SHA-256 digest. Use that digest to select the same image in later Calls:
 
 ```python
 import gfaas
 
-image = gfaas.Image("pytorch-cu130")
+# Replace this placeholder with the digest from your image publisher.
+image = gfaas.Image.from_registry("sha256:<64 lowercase hex characters>")
 ```
 
-The coordinator stores the resolved descriptor in the Environment. Thus, later catalog changes do
-not change that Environment.
+The image must be registered and accessible to your API key's principal. Knowing a digest does not
+grant access to a private image.
 
-If the name is absent from the catalog, the service treats it as a prepared worker image.
+The coordinator resolves names when it accepts each Call. An Environment that contains a name does
+not freeze that name forever. The accepted Call retains its resolved image through placement
+retries.
 
-## Select an explicit descriptor
+An image digest identifies software content. It does not establish compatibility with every GPU,
+CUDA driver, or input. Declare [hardware requirements](hardware.md) where applicable.
 
-You can also supply an immutable descriptor:
+## Explicit descriptors
+
+`Image.from_remote(name, descriptor)` also accepts a remote-image descriptor. This is an advanced
+interface for applications that already retain publication metadata.
 
 ```python
 import json
@@ -30,13 +31,13 @@ from pathlib import Path
 import gfaas
 
 descriptor = json.loads(Path("remote-image.json").read_text())
-image = gfaas.Image.from_remote("cuda-nvcc-s3", descriptor)
+image = gfaas.Image.from_remote("research-image", descriptor)
 ```
 
-Get this descriptor from the service operator. Do not edit its digest, storage key, object count, or
-byte count. An explicit descriptor remains useful for a fixed historical image.
+The descriptor must match an accessible registered image. It cannot authorize an arbitrary storage
+location or bypass publication. Obtain it from the publisher rather than constructing it yourself.
 
-The descriptor has this shape:
+Its structure is:
 
 ```json
 {
@@ -52,13 +53,5 @@ The descriptor has this shape:
 }
 ```
 
-## What the worker does
-
-The worker reads image files through a lazy FUSE filesystem. A local file server downloads missing
-objects into a cache.
-
-Before it stores an object, the file server makes sure that its digest matches. Your function never
-receives object-storage credentials.
-
-Operators can publish shared catalog images. Producers can also publish private images and qualify
-an immutable digest through a normal Call. See [Qualify a published image](qualification.md).
+For most applications, a registered digest is sufficient. The service handles object transfer and
+checks content hashes. Your function does not receive object-storage credentials.

@@ -1,7 +1,11 @@
-# Qualify a published image
+# Check and share a published image
 
-A publisher can run a normal GPU Function to check an immutable image. The image stays private
-until the qualification Call succeeds. The publisher can use it before qualification.
+`Function.qualify()` is a sharing operation. If the Call succeeds, other service principals can use
+the image by its immutable digest. Use ordinary `spawn()` or `remote()` to check an image without
+sharing it.
+
+A publisher can run a normal GPU Function to check an immutable image. The image stays private until
+the qualification Call succeeds. The publisher can use it before qualification.
 
 Configure the Function with the publisher-scoped image name. Pass the digest returned by image
 publication to `Function.qualify`:
@@ -13,7 +17,7 @@ digest = "sha256:<64 lowercase hex characters>"
 app = gfaas.App("image-check", image=gfaas.Image("candidate"))
 
 
-@app.function(gpu_type="gb300", timeout=300)
+@app.function(gpu_count=1, gpu_type="gb300", timeout=300)
 def check_image() -> dict[str, str]:
     import torch
 
@@ -29,13 +33,12 @@ if __name__ == "__main__":
     print(qualification.wait())
 ```
 
-The client pins the Function's Environment to `digest` and submits the qualification marker with
-the Call. The returned `RemoteResult` supports the normal event, log, cancellation, and result
-methods.
+The client pins the Function's Environment to `digest` and submits the qualification marker with the
+Call. The returned `RemoteResult` supports the normal event, log, cancellation, and result methods.
 
-A successful Call makes the immutable digest available to other service principals. It does not
-make the publisher's movable image name public. A failed, cancelled, or timed-out Call leaves the
-digest private. It also leaves earlier qualified digests available.
+A successful Call makes the immutable digest available to other service principals. It does not make
+the publisher's movable image name public. A failed, cancelled, or timed-out Call leaves the digest
+private. It also leaves earlier qualified digests available.
 
 The coordinator does not add object-store, deployment, or repository credentials to the workload.
 The Function result is the publisher's functional check. It is not an operator security approval.

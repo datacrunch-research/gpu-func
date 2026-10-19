@@ -1,38 +1,37 @@
 # vfunc guide
 
-`vfunc` is for people who have CUDA source code but do not have the right
-GPU available locally. It sends a small, selected workspace to a remote GPU
-worker. The worker compiles the code, runs it, and returns the result.
+`vfunc` is for people who have CUDA source code but do not have the right GPU available locally. It
+sends a small, selected workspace to a remote GPU worker. The worker compiles the code, runs it, and
+returns the result.
 
 You can use this guide in either of these situations:
 
-- You received a CUDA course exercise as a ZIP file and want to test your
-  solution on the course hardware.
-- You have a standalone CUDA experiment and want to compile, run, benchmark,
-  or profile it on a remote GPU.
+- You received a CUDA course exercise as a ZIP file and want to test your solution on the course
+  hardware.
+- You have a standalone CUDA experiment and want to compile, run, benchmark, or profile it on a
+  remote GPU.
 
-You do not need a local CUDA installation, `nvcc`, or an NVIDIA GPU. You also
-do not need to understand the gfaas API before you start. You need the
-`vfunc` command, service credentials, and either an exercise or CUDA source
-file.
+You do not need a local CUDA installation, `nvcc`, or an NVIDIA GPU. You also do not need to
+understand the gfaas API before you start. You need the `vfunc` command, service credentials, and
+either an exercise or CUDA source file.
 
 The CLI supports two types of work:
 
-1. **CUDA course exercises.** Start with an exercise directory from a course.
-   Use its tests, benchmarks, sanitizer rules, profiler, and grading logic.
-2. **Custom CUDA programs.** Start with any `.cu` file. Supply a `main()`
-   function in that file or in a separate harness.
+1. **CUDA course exercises.** Start with an exercise directory from a course. Use its tests,
+   benchmarks, sanitizer rules, profiler, and grading logic.
+2. **Custom CUDA programs.** Start with any `.cu` file. Supply a `main()` function in that file or
+   in a separate harness.
 
-Both types can create an Nsight Compute report. The worker stores this report
-as a gfaas Artifact. You can download the report and inspect it locally.
+Both types can create an Nsight Compute report. The worker stores this report as a gfaas Artifact.
+You can download the report and inspect it locally.
 
-gfaas is the remote execution service behind this CLI. It schedules each Call
-on a compatible worker and keeps the Call state after the local command ends.
-`vfunc` turns the service into a CUDA development workflow. It does not
-generate kernels or decide whether a custom program produced the right answer.
+gfaas is the remote execution service behind this CLI. It schedules each Call on a compatible worker
+and keeps the Call state after the local command ends. `vfunc` turns the service into a CUDA
+development workflow. It does not generate kernels or decide whether a custom program produced the
+right answer.
 
-This guide starts with the purpose of each workflow. The command reference and
-the gfaas data flow come later.
+This guide starts with the purpose of each workflow. The command reference and the gfaas data flow
+come later.
 
 ## Contents
 
@@ -55,19 +54,19 @@ the gfaas data flow come later.
 
 ### Course exercise
 
-When an exercise supplies `run.py` and `runner/cli.py`, use the course workflow.
-The exercise defines what correctness and performance mean for that problem.
+When an exercise supplies `run.py` and `runner/cli.py`, use the course workflow. The exercise
+defines what correctness and performance mean for that problem.
 
 The available actions have different purposes:
 
-| Action | Purpose |
-| --- | --- |
-| `compile` | Find compiler and linker errors without running the program. |
-| `test` | Compare the solution with the correctness cases from the exercise. |
-| `benchmark` | Measure the solution with the benchmark cases from the exercise. |
+| Action      | Purpose                                                                |
+| ----------- | ---------------------------------------------------------------------- |
+| `compile`   | Find compiler and linker errors without running the program.           |
+| `test`      | Compare the solution with the correctness cases from the exercise.     |
+| `benchmark` | Measure the solution with the benchmark cases from the exercise.       |
 | `sanitizer` | Find CUDA memory errors with the sanitizer workflow from the exercise. |
-| `profile` | Collect Nsight Compute metrics and exercise-specific feedback. |
-| `grade` | Run the complete assessment that the exercise defines. |
+| `profile`   | Collect Nsight Compute metrics and exercise-specific feedback.         |
+| `grade`     | Run the complete assessment that the exercise defines.                 |
 
 Use these actions as a development loop:
 
@@ -77,25 +76,25 @@ Use these actions as a development loop:
 4. Run `benchmark` to compare implementations.
 5. When timing alone does not explain a result, run `profile`.
 
-The exercise owns its tests and measurements. `vfunc` supplies the remote
-GPU and transports the files and results.
+The exercise owns its tests and measurements. `vfunc` supplies the remote GPU and transports the
+files and results.
 
 ### Custom CUDA program
 
-Use the custom workflow for a standalone experiment, a kernel prototype, or a
-small reproduction. The CLI does not know the correct answer for custom code.
-Your program or harness must detect errors and return a nonzero exit code.
+Use the custom workflow for a standalone experiment, a kernel prototype, or a small reproduction.
+The CLI does not know the correct answer for custom code. Your program or harness must detect errors
+and return a nonzero exit code.
 
 The custom actions are:
 
-| Action | Purpose |
-| --- | --- |
-| `custom compile` | Compile and link the program. Do not run it. |
-| `custom run` | Compile, link, and run the program. |
+| Action           | Purpose                                                |
+| ---------------- | ------------------------------------------------------ |
+| `custom compile` | Compile and link the program. Do not run it.           |
+| `custom run`     | Compile, link, and run the program.                    |
 | `custom profile` | Compile the program and run it through Nsight Compute. |
 
-A custom program is useful for a focused question. Examples include a new
-memory layout, a launch-configuration comparison, or a reduced compiler error.
+A custom program is useful for a focused question. Examples include a new memory layout, a
+launch-configuration comparison, or a reduced compiler error.
 
 ## 2. Install and configure the CLI
 
@@ -113,8 +112,8 @@ Make sure that the command is available:
 vfunc --help
 ```
 
-Your local computer does not need CUDA for remote work. The local report
-commands need the Python module from Nsight Compute, but they do not need a GPU.
+Your local computer does not need CUDA for remote work. The local report commands need the Python
+module from Nsight Compute, but they do not need a GPU.
 
 ### Configure access
 
@@ -125,8 +124,8 @@ export GFAAS_API_BASE="https://gpu.example.com/api"
 export GFAAS_API_KEY="..."
 ```
 
-The CLI does not accept an API key argument. This rule keeps the key out of the
-shell history and process list.
+The CLI does not accept an API key argument. This keeps the key out of process arguments. Supply the
+environment variable without recording its value in shell history.
 
 Show the GPU pools that the coordinator provides:
 
@@ -134,18 +133,18 @@ Show the GPU pools that the coordinator provides:
 vfunc pool list
 ```
 
-A pool is a class of GPU capacity, such as `gb300`. It is not a specific
-worker. The coordinator selects a worker when it places the Call.
+A pool is a class of GPU capacity, such as `gb300`. It is not a specific worker. The coordinator
+selects a worker when it places the Call.
 
-If the coordinator has one pool, `vfunc` selects it automatically. If it
-has multiple pools, use `--gpu-type` to select one.
+If the coordinator has one pool, `vfunc` selects it automatically. If it has multiple pools, use
+`--gpu-type` to select one.
 
 ## 3. Work on a course exercise
 
 ### 3.1 Understand the exercise directory
 
-A distributed course exercise usually arrives as a ZIP file. After extraction,
-the directory has this general structure:
+A distributed course exercise usually arrives as a ZIP file. After extraction, the directory has
+this general structure:
 
 ```text
 01-haxpy/
@@ -157,11 +156,11 @@ the directory has this general structure:
 └── benchmarks/       # performance cases
 ```
 
-The exact names depend on the exercise. The important markers are `run.py` and
-`runner/cli.py`. The CLI uses these markers to find the exercise root.
+The exact names depend on the exercise. The important markers are `run.py` and `runner/cli.py`. The
+CLI uses these markers to find the exercise root.
 
-The worker receives the exercise runner with your solution. This design keeps
-the remote result consistent with the exercise that you received.
+The worker receives the exercise runner with your solution. This design keeps the remote result
+consistent with the exercise that you received.
 
 ### 3.2 Start the development loop
 
@@ -183,21 +182,21 @@ Run the correctness suite:
 vfunc test
 ```
 
-The CLI finds the exercise from the current directory. You can start in a
-subdirectory because the CLI also examines parent directories.
+The CLI finds the exercise from the current directory. You can start in a subdirectory because the
+CLI also examines parent directories.
 
 ### 3.3 Select a test or benchmark
 
-With no spec argument, the exercise runner uses all applicable specs. Supply
-one or more paths to shorten an iteration:
+With no spec argument, the exercise runner uses all applicable specs. Supply one or more paths to
+shorten an iteration:
 
 ```bash
 vfunc test tests/01_corner_n1.txt
 vfunc benchmark benchmarks/01_aligned_small.txt
 ```
 
-Use a narrow spec while you diagnose a specific error. Before completion,
-run the complete suite without spec arguments.
+Use a narrow spec while you diagnose a specific error. Before completion, run the complete suite
+without spec arguments.
 
 ### 3.4 Use an exercise from another directory
 
@@ -215,8 +214,8 @@ vfunc test \
   --file ~/src/my-haxpy.cu
 ```
 
-This command does not modify the extracted exercise. The CLI inserts the
-selected file into the uploaded workspace.
+This command does not modify the extracted exercise. The CLI inserts the selected file into the
+uploaded workspace.
 
 ### 3.5 Use a course checkout
 
@@ -227,8 +226,8 @@ vfunc exercise 01-haxpy benchmark \
   --course-root ~/src/cuda-course
 ```
 
-The exercise identifier selects `exercises/01-haxpy`. The CLI also uploads the
-shared course runner. It excludes every `solutions/` directory.
+The exercise identifier selects `exercises/01-haxpy`. The CLI also uploads the shared course runner.
+It excludes every `solutions/` directory.
 
 ### 3.6 Interpret the exercise result
 
@@ -241,15 +240,14 @@ The exercise runner controls the detailed output. A typical result contains:
 - Hardware counters and recommendations for `profile`.
 - A combined assessment for `grade`.
 
-Read the result as evidence from that exercise, not as a general CUDA score.
-Different exercises use different inputs, warmup rules, and success criteria.
+Read the result as evidence from that exercise, not as a general CUDA score. Different exercises use
+different inputs, warmup rules, and success criteria.
 
 ## 4. Work on a custom CUDA program
 
 ### 4.1 Decide whether you need a harness
 
-The worker builds a real executable. One submitted source file must define
-`main()`.
+The worker builds a real executable. One submitted source file must define `main()`.
 
 When the source file defines `main()`, submit it without a harness:
 
@@ -264,21 +262,18 @@ vfunc custom run scale_kernel.cu \
   --harness scale_harness.cu
 ```
 
-The kernel file normally contains device code and a launch function. The
-harness normally allocates memory, initializes inputs, launches the kernel, and
-checks the result.
+The kernel file normally contains device code and a launch function. The harness normally allocates
+memory, initializes inputs, launches the kernel, and checks the result.
 
-One harness can compare multiple kernel implementations. Different harnesses
-can also run one kernel with different shapes or data types.
+One harness can compare multiple kernel implementations. Different harnesses can also run one kernel
+with different shapes or data types.
 
 ### 4.2 Make correctness observable
 
-`vfunc` treats exit code zero as a successful custom run. It does not inspect
-the numerical output.
+`vfunc` treats exit code zero as a successful custom run. It does not inspect the numerical output.
 
-Make the program compare its output with an expected result. Return a nonzero
-exit code when the comparison fails. Print enough context to diagnose the
-first error.
+Make the program compare its output with an expected result. Return a nonzero exit code when the
+comparison fails. Print enough context to diagnose the first error.
 
 This rule separates two questions:
 
@@ -315,13 +310,13 @@ vfunc custom run kernel.cu \
   --nvcc-flags "-std=c++20 -O2 -lineinfo --use_fast_math"
 ```
 
-The worker adds a CUDA architecture flag when you do not supply one. It reads
-the compute capability from the selected GPU.
+Supply `--arch` for the GPU that will execute the program. The compile stage has no GPU lease. Its
+best-effort device detection cannot guarantee the target of a later GPU stage.
 
 ### 4.5 Profile a custom program
 
-By default, `custom profile` selects an NVTX range named `profile_kernel`.
-Place this range around the code that you want to measure:
+By default, `custom profile` selects an NVTX range named `profile_kernel`. Place this range around
+the code that you want to measure:
 
 ```cpp
 nvtxRangePush("profile_kernel");
@@ -330,8 +325,7 @@ cudaDeviceSynchronize();
 nvtxRangePop();
 ```
 
-The synchronization keeps the asynchronous kernel launch inside the measured
-range.
+The synchronization keeps the asynchronous kernel launch inside the measured range.
 
 When the program has an NVTX structure, use its range name:
 
@@ -349,13 +343,13 @@ vfunc custom profile kernel.cu \
   --artifact-dir ./profiles
 ```
 
-This mode can collect startup kernels and library kernels. When you need a
-focused report, use an NVTX range.
+This mode can collect startup kernels and library kernels. When you need a focused report, use an
+NVTX range.
 
 ## 5. Complete custom-program walkthrough
 
-This walkthrough creates a self-contained vector-add program. The program
-checks one output value and prints a short result.
+This walkthrough creates a self-contained vector-add program. The program checks one output value
+and prints a short result.
 
 ### 5.1 Create the source file
 
@@ -434,8 +428,8 @@ int main(int argc, char** argv) {
 vfunc custom compile vecadd.cu
 ```
 
-This action checks that `nvcc` can compile and link the source. It does not
-allocate GPU memory or launch the kernel.
+This action checks that `nvcc` can compile and link the source. It does not allocate GPU memory or
+launch the kernel.
 
 ### 5.3 Run the program
 
@@ -458,8 +452,8 @@ vfunc custom profile vecadd.cu \
   --artifact-dir ./profiles
 ```
 
-The worker stores `vecadd.ncu-rep` in the declared output Artifact. The CLI
-downloads that file into `./profiles` after the Call finishes.
+The worker stores `vecadd.ncu-rep` in the declared output Artifact. The CLI downloads that file into
+`./profiles` after the Call finishes.
 
 ### 5.5 Read the profile
 
@@ -469,19 +463,18 @@ If Nsight Compute is installed locally, summarize the report:
 vfunc report summary ./profiles/vecadd.ncu-rep --per-kernel
 ```
 
-The summary can show duration, DRAM traffic, throughput, occupancy,
-instructions, and launch-specific metrics.
+The summary can show duration, DRAM traffic, throughput, occupancy, instructions, and
+launch-specific metrics.
 
 ## 6. Measure performance
 
 ### Benchmark before you profile
 
-A benchmark answers, "How long did this implementation take for this input?"
-Use the course benchmark workflow or a timing loop in a custom harness.
+A benchmark answers, "How long did this implementation take for this input?" Use the course
+benchmark workflow or a timing loop in a custom harness.
 
-A profiler answers, "What did the hardware do during this kernel?" Nsight
-Compute can replay a kernel many times to collect counters. As a result, the
-profile duration is not a benchmark result.
+A profiler answers, "What did the hardware do during this kernel?" Nsight Compute can replay a
+kernel many times to collect counters. As a result, the profile duration is not a benchmark result.
 
 Use this sequence:
 
@@ -493,8 +486,8 @@ Use this sequence:
 
 ### Interpret common metrics
 
-No single metric proves that a kernel is good. Interpret counters together with
-the algorithm and benchmark result.
+No single metric proves that a kernel is good. Interpret counters together with the algorithm and
+benchmark result.
 
 - **Duration** shows time for captured launches. Profiler replay can affect it.
 - **DRAM read and write bytes** show traffic to device memory.
@@ -504,13 +497,13 @@ the algorithm and benchmark result.
 - **Instructions** help compare the amount of executed work.
 - **Loads and stores** help explain memory behavior.
 
-Low occupancy is not automatically an error. A kernel can be fast with low
-occupancy when it has enough independent work or uses specialized hardware.
+Low occupancy is not automatically an error. A kernel can be fast with low occupancy when it has
+enough independent work or uses specialized hardware.
 
 ### Select an Nsight metric set
 
-Custom profiling uses `--set basic` by default. When the basic report cannot
-answer the question, use a larger metric set:
+Custom profiling uses `--set basic` by default. When the basic report cannot answer the question,
+use a larger metric set:
 
 ```bash
 vfunc custom profile vecadd.cu \
@@ -518,22 +511,21 @@ vfunc custom profile vecadd.cu \
   --artifact-dir ./profiles-full
 ```
 
-The full set takes longer because Nsight Compute uses more replay passes. Do
-not use it for every edit.
+The full set takes longer because Nsight Compute uses more replay passes. Do not use it for every
+edit.
 
 ## 7. Use durable Calls and Artifacts
 
 ### Call identity
 
-Every remote command creates a durable gfaas Call. The CLI prints its identity
-immediately:
+Every remote command creates a durable gfaas Call. The CLI prints its identity immediately:
 
 ```text
 call: call_...
 ```
 
-The Call exists independently of the local terminal. A network interruption
-does not erase the Call or its retained events.
+The Call exists independently of the local terminal. A network interruption does not erase the Call
+or its retained events.
 
 ### Detach from a Call
 
@@ -552,8 +544,7 @@ vfunc call logs call_... --follow
 vfunc call artifacts call_...
 ```
 
-When the local terminal must not remain open, detach from a long benchmark or
-profile.
+When the local terminal must not remain open, detach from a long benchmark or profile.
 
 ### Cancel a Call
 
@@ -563,17 +554,15 @@ Cancel a detached Call explicitly:
 vfunc call cancel call_... --reason "experiment no longer needed"
 ```
 
-If you interrupt a foreground `vfunc` command, the CLI requests remote Call
-cancellation. The CLI prints the Call identity so that you can inspect its final
-state with `vfunc call show`.
+If you interrupt a foreground `vfunc` command, the CLI requests remote Call cancellation. The CLI
+prints the Call identity so that you can inspect its final state with `vfunc call show`.
 
 ### Understand the two time limits
 
-`--timeout` sets the worker execution limit. The coordinator also applies the
-worker policy ceiling.
+`--timeout` sets the worker execution limit. The coordinator also applies the worker policy ceiling.
 
-`--wait-timeout` limits the local wait. If this limit expires, the remote Call
-can continue. Use its Call identity to inspect or cancel it.
+`--wait-timeout` limits the local wait. If this limit expires, the remote Call can continue. Use its
+Call identity to inspect or cancel it.
 
 ### Avoid duplicate submissions
 
@@ -588,25 +577,25 @@ The coordinator uses this key to identify a repeated Call request.
 
 ### Profile Artifacts
 
-Nsight reports do not travel inside result JSON. They can be large, and they
-must remain useful after the local process ends.
+Nsight reports do not travel inside result JSON. They can be large, and they must remain useful
+after the local process ends.
 
-The worker publishes reports through a declared `profiles` output Artifact.
-Use `--artifact-dir` to download them immediately:
+The worker publishes reports through a declared `profiles` output Artifact. Use `--artifact-dir` to
+download them immediately:
 
 ```bash
 vfunc custom profile vecadd.cu --artifact-dir ./profiles
 ```
 
-Without `--artifact-dir`, the CLI prints the Artifact identity. Download it
-later with the same command:
+Without `--artifact-dir`, the CLI prints the Artifact identity. Download it later with the same
+command:
 
 ```bash
 vfunc artifact download art_... ./profiles
 ```
 
-The CLI does not replace an existing local report. Select a new directory for
-each experiment, or remove the old file first.
+The CLI does not replace an existing local report. Select a new directory for each experiment, or
+remove the old file first.
 
 ## 8. Select GPU and system resources
 
@@ -618,16 +607,14 @@ If the coordinator has multiple pools, select the required pool:
 vfunc custom run vecadd.cu --gpu-type gb300
 ```
 
-The pool name describes scheduler capacity. It does not select a specific tray
-or worker.
+The pool name describes scheduler capacity. It does not select a specific tray or worker.
 
-The compatibility option `--gpu GB300` derives both `gb300` and `sm_103`.
-For new scripts, use `--gpu-type`. Omit `--arch` unless the source needs it.
+The compatibility option `--gpu GB300` derives both `gb300` and `sm_103`. For new scripts, use
+`--gpu-type` and an explicit `--arch`.
 
 ### Select the CUDA architecture
 
-For custom programs, the worker detects the compute capability when `--arch`
-is absent. Use an explicit architecture for reproducibility or special code:
+For custom programs, use an explicit architecture that matches the execution GPU:
 
 ```bash
 vfunc custom run vecadd.cu \
@@ -635,8 +622,8 @@ vfunc custom run vecadd.cu \
   --arch sm_103
 ```
 
-The architecture controls code generation. The GPU pool controls placement.
-These values describe related but different requirements.
+The architecture controls code generation. The GPU pool controls placement. These values describe
+related but different requirements.
 
 ### Request multiple GPUs
 
@@ -646,22 +633,22 @@ vfunc custom run multi_gpu.cu \
   --gpu-count 4
 ```
 
-This option makes four GPUs visible to one process. It does not make a
-single-GPU program parallel. The program must initialize and use each device.
+This option makes four GPUs visible to one process. It does not make a single-GPU program parallel.
+The program must initialize and use each device.
 
 ### Request host resources
 
 All remote workflows accept these options:
 
-| Option | Purpose |
-| --- | --- |
-| `--cpu-millicores N` | Request CPU capacity. |
-| `--memory SIZE` | Request host memory. |
-| `--storage SIZE` | Request temporary storage. |
-| `--shared-memory SIZE` | Request shared memory. |
-| `--max-log SIZE` | Set the retained log limit. |
-| `--max-output SIZE` | Set the output Artifact limit. |
-| `--env NAME=VALUE` | Add an environment variable to the worker process. |
+| Option                 | Purpose                                            |
+| ---------------------- | -------------------------------------------------- |
+| `--cpu-millicores N`   | Request CPU capacity.                              |
+| `--memory SIZE`        | Request host memory.                               |
+| `--storage SIZE`       | Request temporary storage.                         |
+| `--shared-memory SIZE` | Request shared memory.                             |
+| `--max-log SIZE`       | Set the retained log limit.                        |
+| `--max-output SIZE`    | Set the output Artifact limit.                     |
+| `--env NAME=VALUE`     | Add an environment variable to the worker process. |
 
 Sizes accept values such as `512MiB`, `4GiB`, and `1TiB`.
 
@@ -690,8 +677,8 @@ vfunc report summary ./profiles/vecadd.ncu-rep
 vfunc report summary ./profiles/vecadd.ncu-rep --per-kernel
 ```
 
-This command needs `ncu_report.py`. Nsight Compute supplies this module. The
-command does not need a local GPU.
+This command needs `ncu_report.py`. Nsight Compute supplies this module. The command does not need a
+local GPU.
 
 If Python cannot find the module, add its directory to `PYTHONPATH`:
 
@@ -701,8 +688,8 @@ export PYTHONPATH="/opt/nvidia/nsight-compute/<version>/extras/python:$PYTHONPAT
 
 ### Course-specific feedback
 
-Some courses define rules that convert counters into exercise-specific advice.
-The feedback command uses those rules:
+Some courses define rules that convert counters into exercise-specific advice. The feedback command
+uses those rules:
 
 ```bash
 vfunc report feedback ./profiles/haxpy.ncu-rep \
@@ -712,9 +699,8 @@ vfunc report feedback ./profiles/haxpy.ncu-rep \
   --trust-course-code
 ```
 
-CAUTION: Inspect the course code before you use `--trust-course-code`. This
-command imports and executes the selected exercise `run.py` in the local Python
-process.
+CAUTION: Inspect the course code before you use `--trust-course-code`. This command imports and
+executes the selected exercise `run.py` in the local Python process.
 
 The generic summary does not execute course code.
 
@@ -730,40 +716,41 @@ This section explains the remote system after the user workflows are clear.
 4. The gfaas SDK packages the worker function.
 5. The coordinator creates a durable Call with the requested resources.
 
-Source files do not travel as a large JSON object. Binary exercise fixtures
-remain byte-for-byte unchanged in the tree Artifact.
+Source files do not travel as a large JSON object. Binary exercise fixtures remain byte-for-byte
+unchanged in the tree Artifact.
 
 ### Placement and preparation
 
-The coordinator offers the Call to a compatible GPU pool. A worker can reject
-the offer when GPUs or other resources are busy.
+The coordinator offers the Call to a compatible GPU pool. A worker can reject the offer when GPUs or
+other resources are busy.
 
-While a Call waits, `vfunc` shows capacity events. After placement, the
-subscriber resolves the image and stages the source, input, and workspace Artifacts.
+While a Call waits, `vfunc` shows capacity events. After placement, the subscriber resolves the
+image and stages the source, input, and workspace Artifacts.
 
 Call status includes `preparation` during this work. It reports the worker, placement generation,
-phase, completed content, and transfer counters. Large transfers report byte movement before a file completes.
-After 30 seconds without a report, preparation becomes `stalled`. This means that progress is unconfirmed.
-The capacity-wait deadline still applies. `gfaas.call_status_summary(job.status())` formats these fields.
+phase, completed content, and transfer counters. Large transfers report byte movement before a file
+completes. After 30 seconds without a report, preparation becomes `stalled`. This means that
+progress is unconfirmed. The capacity-wait deadline still applies.
+`gfaas.call_status_summary(job.status())` formats these fields.
 
 ### Execution
 
-The worker copies the staged workspace into a private scratch directory. It
-checks each file hash before it starts a compiler or course runner.
+The worker copies the staged workspace into a private scratch directory. It checks each file hash
+before it starts a compiler or course runner.
 
-For a course exercise, the worker runs the submitted `run.py`. For a custom
-program, the worker invokes `nvcc` and then runs the executable.
+For a course exercise, the worker runs the submitted `run.py`. For a custom program, the worker
+invokes `nvcc` and then runs the executable.
 
-The worker starts each compiler or program in a process group. A timeout stops
-the complete group, not only its parent process.
+The worker starts each compiler or program in a process group. A timeout stops the complete group,
+not only its parent process.
 
 ### Results and cleanup
 
-Standard output and standard error become retained Call events. The small
-structured result becomes the Call result.
+Standard output and standard error become retained Call events. The small structured result becomes
+the Call result.
 
-Nsight reports become output Artifacts. The worker removes its temporary
-scratch copy when the worker function ends.
+Nsight reports become output Artifacts. The worker removes its temporary scratch copy when the
+worker function ends.
 
 ## 11. Command reference
 
@@ -789,15 +776,15 @@ vfunc exercise EXERCISE_ID \
 
 Important exercise options:
 
-| Option | Purpose |
-| --- | --- |
-| `--exercise-dir DIR` | Select an extracted exercise directory. |
-| `--course-root DIR` | Select a complete course checkout. |
-| `--file PATH` | Replace the submitted solution for this Call. |
-| `--exercise-id ID` | Set the report label for an auto-detected exercise. |
-| `--json PATH` | Save the structured result. |
-| `--artifact-dir DIR` | Download profile reports. |
-| `--verbose` | Show additional exercise-runner output. |
+| Option               | Purpose                                             |
+| -------------------- | --------------------------------------------------- |
+| `--exercise-dir DIR` | Select an extracted exercise directory.             |
+| `--course-root DIR`  | Select a complete course checkout.                  |
+| `--file PATH`        | Replace the submitted solution for this Call.       |
+| `--exercise-id ID`   | Set the report label for an auto-detected exercise. |
+| `--json PATH`        | Save the structured result.                         |
+| `--artifact-dir DIR` | Download profile reports.                           |
+| `--verbose`          | Show additional exercise-runner output.             |
 
 ### Custom programs
 
@@ -809,33 +796,33 @@ vfunc custom profile SOURCE.cu [--harness HARNESS.cu] [options]
 
 Important custom options:
 
-| Option | Purpose |
-| --- | --- |
-| `--harness PATH` | Add the source file that defines `main()`. |
-| `--arg VALUE` | Add one program argument. Repeat this option for more arguments. |
-| `--nvcc-flags TEXT` | Replace the default compiler flags. |
-| `--output NAME` | Set the remote executable name. |
-| `--ncu-args TEXT` | Set Nsight Compute arguments. |
-| `--nvtx-range NAME` | Select an NVTX range. |
-| `--no-nvtx-filter` | Profile the complete executable. |
-| `--report-name NAME` | Set the base name for the `.ncu-rep` file. |
-| `--json PATH` | Save the structured result. |
-| `--artifact-dir DIR` | Download profile reports. |
+| Option               | Purpose                                                          |
+| -------------------- | ---------------------------------------------------------------- |
+| `--harness PATH`     | Add the source file that defines `main()`.                       |
+| `--arg VALUE`        | Add one program argument. Repeat this option for more arguments. |
+| `--nvcc-flags TEXT`  | Replace the default compiler flags.                              |
+| `--output NAME`      | Set the remote executable name.                                  |
+| `--ncu-args TEXT`    | Set Nsight Compute arguments.                                    |
+| `--nvtx-range NAME`  | Select an NVTX range.                                            |
+| `--no-nvtx-filter`   | Profile the complete executable.                                 |
+| `--report-name NAME` | Set the base name for the `.ncu-rep` file.                       |
+| `--json PATH`        | Save the structured result.                                      |
+| `--artifact-dir DIR` | Download profile reports.                                        |
 
 ### Common remote options
 
-| Option | Purpose |
-| --- | --- |
-| `--gpu-type NAME` | Select a GPU pool. |
-| `--gpu-count N` | Request the specified number of GPUs. |
-| `--image NAME` | Select a registered worker image. |
-| `--arch ARCH` | Set the CUDA compilation architecture. |
-| `--timeout SEC` | Set the worker execution limit. |
-| `--capacity-wait SEC` | Set the maximum wait for capacity. |
-| `--wait-timeout SEC` | Set the local wait limit. |
-| `--idempotency-key KEY` | Identify repeat submissions. |
-| `--detach` | Return after Call creation. |
-| `--json-events` | Write retained Call events as JSON Lines. |
+| Option                  | Purpose                                   |
+| ----------------------- | ----------------------------------------- |
+| `--gpu-type NAME`       | Select a GPU pool.                        |
+| `--gpu-count N`         | Request the specified number of GPUs.     |
+| `--image NAME`          | Select a registered worker image.         |
+| `--arch ARCH`           | Set the CUDA compilation architecture.    |
+| `--timeout SEC`         | Set the worker execution limit.           |
+| `--capacity-wait SEC`   | Set the maximum wait for capacity.        |
+| `--wait-timeout SEC`    | Set the local wait limit.                 |
+| `--idempotency-key KEY` | Identify repeat submissions.              |
+| `--detach`              | Return after Call creation.               |
+| `--json-events`         | Write retained Call events as JSON Lines. |
 
 Global connection options must appear before the subcommand:
 
@@ -846,8 +833,7 @@ vfunc --api-base https://gpu.example.com/api \
   custom run vecadd.cu
 ```
 
-Use environment variables for normal operation. Do not put API keys in command
-arguments.
+Use environment variables for normal operation. Do not put API keys in command arguments.
 
 ## 12. Workspace and trust rules
 
@@ -860,47 +846,47 @@ The CLI uploads only the selected exercise or custom source files. It rejects:
 - More than 1GiB of file data.
 - Special file types.
 
-The CLI skips common version-control, cache, build, and virtual-environment
-directories. It also excludes course solution directories.
+The CLI skips common version-control, cache, build, and virtual-environment directories. It also
+excludes course solution directories.
 
-The remote worker runs submitted code inside the selected worker image.
-Treat every submitted source tree as executable code.
+The remote worker runs submitted code inside the selected worker image. Treat every submitted source
+tree as executable code.
 
-The local `report feedback` command has a different trust boundary. It imports
-course Python code into the local process. It requires `--trust-course-code`.
+The local `report feedback` command has a different trust boundary. It imports course Python code
+into the local process. It requires `--trust-course-code`.
 
-The CLI does not replace existing JSON files or downloaded profile reports.
-This rule prevents one experiment from silently overwriting another.
+The CLI does not replace existing JSON files or downloaded profile reports. This rule prevents one
+experiment from silently overwriting another.
 
 ## 13. Exit status
 
 The course and custom workflow commands use these exit codes:
 
-| Code | Meaning |
-| --- | --- |
-| `0` | The workflow passed, or the CLI detached successfully. |
-| `1` | Compilation or linking failed. |
-| `2` | The program stopped with an error. |
-| `3` | A correctness test reported a wrong answer. |
-| `4` | The workflow exceeded a time limit. |
-| `5` | Setup, API access, remote execution, or report parsing failed. |
-| `130` | The user interrupted the command. |
+| Code  | Meaning                                                        |
+| ----- | -------------------------------------------------------------- |
+| `0`   | The workflow passed, or the CLI detached successfully.         |
+| `1`   | Compilation or linking failed.                                 |
+| `2`   | The program stopped with an error.                             |
+| `3`   | A correctness test reported a wrong answer.                    |
+| `4`   | The workflow exceeded a time limit.                            |
+| `5`   | Setup, API access, remote execution, or report parsing failed. |
+| `130` | The user interrupted the command.                              |
 
-A course runner controls its detailed exit result. A custom harness must return
-a nonzero exit code for an incorrect numerical result.
+A course runner controls its detailed exit result. A custom harness must return a nonzero exit code
+for an incorrect numerical result.
 
 The `run` and `local run` commands return the program status when the program stops with an error.
 They limit a positive program status to `125`. They return `1` for a negative status or a CLI error.
 
-The Call, Artifact, pool, and completion commands return `0` after success. They return `1` after
-a client or service error.
+The Call, Artifact, pool, and completion commands return `0` after success. They return `1` after a
+client or service error.
 
 ## 14. Troubleshooting
 
 ### The CLI cannot reach the coordinator
 
-Make sure that `GFAAS_API_BASE` contains the public API path. Make sure that
-`GFAAS_API_KEY` contains a valid key.
+Make sure that `GFAAS_API_BASE` contains the public API path. Make sure that `GFAAS_API_KEY`
+contains a valid key.
 
 Show the available pools:
 
@@ -910,50 +896,47 @@ vfunc pool list
 
 ### The requested GPU pool is not configured
 
-Run `vfunc pool list` and select one of the reported names with
-`--gpu-type`.
+Run `vfunc pool list` and select one of the reported names with `--gpu-type`.
 
 ### The Call waits for capacity
 
-The selected workers have insufficient free GPUs or other resources. Keep the
-Call queued, select another pool, or cancel it.
+The selected workers have insufficient free GPUs or other resources. Keep the Call queued, select
+another pool, or cancel it.
 
 Use `--capacity-wait` to set the maximum scheduler wait.
 
 ### The CLI cannot find the exercise
 
-Make sure that the exercise directory contains `run.py` and `runner/cli.py`.
-Run the command from that directory, or use `--exercise-dir`.
+Make sure that the exercise directory contains `run.py` and `runner/cli.py`. Run the command from
+that directory, or use `--exercise-dir`.
 
 ### The linker reports `undefined reference to main`
 
-The custom source contains a kernel but no host entry point. Add a harness that
-defines `main()`, then pass it with `--harness`.
+The custom source contains a kernel but no host entry point. Add a harness that defines `main()`,
+then pass it with `--harness`.
 
 ### A custom profile contains no selected kernel
 
-The program did not create the default `profile_kernel` NVTX range. Add that
-range, select the correct name with `--nvtx-range`, or use
-`--no-nvtx-filter`.
+The program did not create the default `profile_kernel` NVTX range. Add that range, select the
+correct name with `--nvtx-range`, or use `--no-nvtx-filter`.
 
 ### Nsight profiling is slow
 
-Nsight Compute replays kernels to collect metric groups. `--set full` needs
-more passes than `--set basic`.
+Nsight Compute replays kernels to collect metric groups. `--set full` needs more passes than
+`--set basic`.
 
 Use a benchmark for timing. Use a profile to explain the benchmark.
 
 ### The local report parser cannot import `ncu_report.py`
 
-Install Nsight Compute locally, or add its `extras/python` directory to
-`PYTHONPATH`. A local GPU is not necessary for report parsing.
+Install Nsight Compute locally, or add its `extras/python` directory to `PYTHONPATH`. A local GPU is
+not necessary for report parsing.
 
 ### A result file already exists
 
-Select a new output path. The CLI does not replace existing JSON or profile
-files.
+Select a new output path. The CLI does not replace existing JSON or profile files.
 
 ### A local wait ended but the Call still runs
 
-`--wait-timeout` limits only the local wait. Inspect the Call with
-`vfunc call show`. Then watch or cancel it with the same command.
+`--wait-timeout` limits only the local wait. Inspect the Call with `vfunc call show`. Then watch or
+cancel it with the same command.
