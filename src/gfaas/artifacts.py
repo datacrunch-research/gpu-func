@@ -99,9 +99,12 @@ class ArtifactOutput:
     required: bool = True
     publish_on_failure: bool = True
     layout: str = "blob"
+    retention: Literal["keep", "call", "expire"] | None = None
+    ttl_seconds: int | None = None
 
     def __post_init__(self) -> None:
         _validate_output_identity(self.name, self.relative_path, self.kind)
+        _output_retention(self.retention, self.ttl_seconds)
         if not self.media_type or len(self.media_type) > 255:
             raise ValueError(f"invalid Artifact output media type {self.media_type!r}")
         if self.layout not in {"blob", "tree"}:
@@ -118,6 +121,8 @@ class ArtifactOutput:
         kind: str = "output",
         required: bool = True,
         publish_on_failure: bool = True,
+        retention: Literal["keep", "call", "expire"] | None = None,
+        ttl_seconds: int | None = None,
     ) -> ArtifactOutput:
         """Declare one directory that the function publishes at completion."""
         return cls(
@@ -128,6 +133,8 @@ class ArtifactOutput:
             required=required,
             publish_on_failure=publish_on_failure,
             layout="tree",
+            retention=retention,
+            ttl_seconds=ttl_seconds,
         )
 
     @property
@@ -149,6 +156,7 @@ class ArtifactOutput:
     def request(self) -> dict[str, Any]:
         """Return the public Call declaration for this output."""
         return {
+            **_output_retention(self.retention, self.ttl_seconds),
             "name": self.name,
             "path": self.relative_path,
             "kind": self.kind,
@@ -169,9 +177,12 @@ class ArtifactCheckpoint:
     relative_path: str
     kind: str = "output"
     maximum_versions: int = 8
+    retention: Literal["keep", "call", "expire"] | None = None
+    ttl_seconds: int | None = None
 
     def __post_init__(self) -> None:
         _validate_output_identity(self.name, self.relative_path, self.kind)
+        _output_retention(self.retention, self.ttl_seconds)
         if len(self.name) > 119:
             raise ValueError("checkpoint names must be at most 119 characters")
         if not 1 <= self.maximum_versions <= 64:
@@ -243,6 +254,7 @@ class ArtifactCheckpoint:
     def request(self) -> dict[str, Any]:
         """Return the public Call declaration for this checkpoint."""
         return {
+            **_output_retention(self.retention, self.ttl_seconds),
             "name": self.name,
             "path": self.relative_path,
             "kind": self.kind,
@@ -253,6 +265,26 @@ class ArtifactCheckpoint:
             "required": False,
             "publish_on_failure": False,
         }
+
+
+def _output_retention(mode: str | None, ttl: int | None) -> dict[str, Any]:
+    if mode is None and ttl is None:
+        return {}
+    mode = "expire" if mode is None else mode
+    if mode not in {"keep", "call", "expire"}:
+        raise ValueError("output retention must be keep, call, or expire")
+    if mode == "expire":
+        if (
+            isinstance(ttl, bool)
+            or not isinstance(ttl, int)
+            or ttl < 1
+            or ttl > (2**63 - 1) // 1000
+        ):
+            raise ValueError("expiring output retention requires a positive ttl_seconds")
+        return {"retention": {"mode": mode, "ttl_seconds": ttl}}
+    if ttl is not None:
+        raise ValueError("ttl_seconds is only valid with expire retention")
+    return {"retention": {"mode": mode}}
 
 
 def _validate_output_identity(name: str, relative_path: str, kind: str) -> None:

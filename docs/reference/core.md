@@ -61,21 +61,25 @@ See [Artifact inputs](../artifacts/ref.md) for nested references and attachment 
 
 ## Declared outputs
 
-`ArtifactOutput(name, relative_path, kind="output", media_type="application/octet-stream", required=True, publish_on_failure=True, layout="blob")`
+`ArtifactOutput(name, relative_path, kind="output", media_type="application/octet-stream", required=True, publish_on_failure=True, layout="blob", retention=None, ttl_seconds=None)`
 describes a terminal file output.
 
 Use
-`ArtifactOutput.directory(name, relative_path, *, kind="output", required=True, publish_on_failure=True)`
+`ArtifactOutput.directory(name, relative_path, *, kind="output", required=True, publish_on_failure=True, retention=None, ttl_seconds=None)`
 for a tree. The class sets its tree media type. `path` gives the writable remote destination. For
 file outputs, `open()` creates parent directories. `request()` returns the API output declaration.
 
-`ArtifactCheckpoint(name, relative_path, kind="output", maximum_versions=8)` describes directory
-checkpoints. `publish(relative_directory)` marks a completed child directory and returns its
-generation. The marker does not confirm remote durability. Check the Call's Artifact list before
-relying on it.
+`ArtifactCheckpoint(name, relative_path, kind="output", maximum_versions=8, retention=None, ttl_seconds=None)`
+describes directory checkpoints. `publish(relative_directory)` marks a completed child directory and
+returns its generation. The marker does not confirm remote durability. Check the Call's Artifact
+list before relying on it.
 
-See [outputs and checkpoints](../artifacts/outputs.md) for required files, failure publication, and
-limits.
+`retention` accepts `"keep"`, `"call"`, or `"expire"`. A positive `ttl_seconds` selects expiry when
+`retention` is omitted. Expire requires a duration. Keep and Call scope reject one. Omitting both
+preserves the default lifetime for that output.
+
+See [outputs and checkpoints](../artifacts/outputs.md) for retention, required files, failure
+publication, and limits.
 
 ## ArtifactUploadProgress
 
