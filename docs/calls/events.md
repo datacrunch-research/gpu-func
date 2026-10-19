@@ -13,17 +13,55 @@ for stream, text in job.iter_logs():
     print(f"[{stream}] {text}", end="")
 ```
 
-Set a total client deadline if the process must stop after a bounded wait:
+If the process needs a bounded wait, set a total client deadline:
 
 ```python
 for stream, text in job.iter_logs(timeout_s=900):
     print(f"[{stream}] {text}", end="")
 ```
 
-With `timeout_s`, the SDK polls the durable event pages. The deadline includes queue and execution
-time. It does not change the Call's capacity wait or execution timeout.
+With `timeout_s`, the SDK polls the durable event pages. Without it, the SDK follows the SSE stream.
+With `follow=False`, the SDK reads the currently available event pages and returns.
 
-## Reconnect
+The deadline starts when iteration starts. It includes requests, retries, waits, and time that your
+code spends between events. Recovery does not reset it. The SDK limits HTTP socket timeouts to the
+remaining time and checks the deadline between response chunks. A socket operation can return after
+the deadline. The SDK then raises `TimeoutError` instead of delivering more events.
+
+A local timeout does not change the Call's capacity wait or execution timeout. Closing the iterator
+also leaves the remote Call running.
+
+## Automatic recovery
+
+`iter_events()` and `iter_logs()` recover from temporary connection errors. Recovery resumes after
+the last delivered event cursor. It does not resubmit or cancel the Call.
+
+The same rules apply to polling and SSE:
+
+- Retry connection errors, network timeouts, and premature disconnects.
+- Retry HTTP 408, 429, 500, 502, 503, and 504.
+- Allow five retries per interruption, with delays of 0.5, 1, 2, 4, and 8 seconds.
+- Limit each recovery period to 60 seconds. The total watch deadline can end recovery sooner.
+- Honor `Retry-After` as seconds or an HTTP date. If its delay exceeds the recovery budget, raise
+  the error without retrying early.
+- Reset the recovery budget after delivery of an event or a successful polling cycle.
+- Stop immediately for authentication errors, other HTTP errors, or invalid event data.
+
+If recovery fails, the iterator raises the last transport error or `GfaasError`. HTTP errors include
+`GfaasError.status_code`. If the total deadline expires, it raises `TimeoutError`. Keyboard
+interrupts and iterator closure stop observation without further retries.
+
+After SSE closes, the SDK reads Call status to distinguish completion from an interrupted stream.
+For a completed Call, it drains the remaining events. This also handles a supplied cursor that
+follows the terminal event.
+
+These guarantees apply to retained events. Reconnection cannot recover output that the service
+already discarded under its retention limits.
+
+## Reconnect from your application
+
+Automatic recovery retains its cursor within the iterator. To resume after a process restart or an
+exhausted retry budget, save the Call ID and cursor in your application.
 
 Store the cursor after you process an event:
 
@@ -35,7 +73,7 @@ for event in job.iter_events(follow=True):
     cursor = event["cursor"]
 ```
 
-If the connection closes early, reconnect after the stored cursor:
+After a restart or an exhausted retry budget, create a new iterator after the stored cursor:
 
 ```python
 for event in job.iter_events(after=cursor, follow=True):
