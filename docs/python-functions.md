@@ -1,10 +1,10 @@
-# Python wrapper functions
+# Python functions
 
-A Python function runs inside a prepared image. If a kernel experiment needs custom preparation,
-Artifact inputs, or result processing, use this path.
+A Python function runs in a registered image on a worker. Use this interface for GPU computation,
+training, data preparation, or another bounded Python task. CPU-only Calls are supported too.
 
-For ordinary CUDA source, use `gfaas.compile_and_run()` first. It already uses the Python function
-path and the `cuda-nvcc` image.
+For a complete CUDA C++ program, `gfaas.compile_and_run()` provides a compile-and-execute helper.
+The example below shows how to wrap the CUDA runner in an ordinary Python function.
 
 The SDK packages the Python file that defines the function. It does not package an entire project or
 install local dependencies.
@@ -45,8 +45,23 @@ under `if __name__ == "__main__":`.
 Network access depends on the service policy. Put required software in the image. Pass required
 files as Artifacts.
 
-The SDK serializes arguments and results with Cloudpickle. Each serialized Artifact must fit the
-configured Artifact size limit.
+## Serialization and trust
+
+The SDK serializes arguments and Python results with Cloudpickle. The client and workload need
+compatible Python and dependency versions. Cloudpickle supports transfer between the same Python
+version; it is not a portable format for arbitrary Python versions or long-term object storage. See
+[Cloudpickle's compatibility guidance](https://github.com/cloudpipe/cloudpickle#readme).
+
+Only decode results from workloads you trust. `remote()` and `wait()` can execute code in your
+client process while they decode a pickle result. A verified digest proves byte integrity, not safe
+content. Remote container isolation does not protect the client from an unsafe result.
+
+For applications that accept untrusted code, prefer declared data outputs and a constrained format
+such as JSON. Inspect status and download those files without decoding the Python return value.
+
+Large serialized arguments use multipart uploads. Results download to a verified temporary file
+before decoding. The decoded object must still fit in client memory. Use `ArtifactRef` for large
+files that the remote function can read directly.
 
 ## Decorator options
 
@@ -65,6 +80,7 @@ configured Artifact size limit.
 | `shared_memory_bytes`     | Size of the `/dev/shm` tmpfs. Its pages also count against `memory_bytes`.                            |
 | `max_log_bytes`           | Combined retained standard output and standard error.                                                 |
 | `max_output_bytes`        | Combined bytes for declared output Artifacts.                                                         |
+| `outputs`                 | Declared `ArtifactOutput` and `ArtifactCheckpoint` values. See [outputs](artifacts/outputs.md).       |
 | `env`                     | Environment variables for the function.                                                               |
 
 The `env` values become part of the durable Environment definition. The coordinator stores these
@@ -74,6 +90,9 @@ Use `gfaas.scratch_path()` for writable temporary files. The path exists only in
 function. The worker reserves its requested capacity and checks logical file sizes during the run.
 This check is not a filesystem quota. A short write can exceed the limit before the next check. The
 worker then fails the Call and removes the scratch directory.
+
+The decorator requests no GPU unless `gpu_count` or the older `gpu` option is set. Use `gpu_count=1`
+for one GPU. `gpu_type` selects a pool; it does not request a device.
 
 `gpu_type="any"` permits coordinator placement across pools. The deployment must enable `any` in its
 configured pool list. A named pool restricts both CPU and GPU stages to that pool.

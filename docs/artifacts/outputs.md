@@ -18,17 +18,18 @@ profile = gfaas.ArtifactOutput(
     media_type="application/json",
 )
 
-@app.function(gpu="GB300", outputs=(profile,))
+@app.function(gpu_count=1, gpu_type="gb300", outputs=(profile,))
 def profile_kernel() -> dict[str, float]:
     measurements = {"duration_ms": 12.4}
     with profile.open("w", encoding="utf-8") as file:
         json.dump(measurements, file)
     return measurements
 
-job = profile_kernel.spawn()
-print(job.wait())
-for publication in job.artifacts()["items"]:
-    print(publication["name"], publication["artifact"]["id"])
+if __name__ == "__main__":
+    job = profile_kernel.spawn()
+    print(job.wait())
+    for publication in job.artifacts()["items"]:
+        print(publication["name"], publication["artifact"]["id"])
 ```
 
 The service sets `GFAAS_OUTPUT_ROOT` inside the function. `ArtifactOutput.path` resolves below this
@@ -40,7 +41,8 @@ this request on the function when its output needs a larger limit:
 
 ```python
 @app.function(
-    gpu="GB300",
+    gpu_count=1,
+    gpu_type="gb300",
     outputs=(profile,),
     max_output_bytes=2 * 1024**3,
 )
@@ -70,7 +72,7 @@ import gfaas
 
 adapter = gfaas.ArtifactOutput.directory("adapter", "adapter")
 
-@app.function(gpu="GB300", outputs=(adapter,))
+@app.function(gpu_count=1, gpu_type="gb300", outputs=(adapter,))
 def train_adapter() -> str:
     adapter.path.mkdir(parents=True)
     (adapter.path / "adapter_config.json").write_text("{}\n")
@@ -95,7 +97,7 @@ checkpoint = gfaas.ArtifactCheckpoint(
     maximum_versions=8,
 )
 
-@app.function(gpu="GB300", outputs=(checkpoint,))
+@app.function(gpu_count=1, gpu_type="gb300", outputs=(checkpoint,))
 def train() -> str:
     version = checkpoint.path / "step-001000"
     version.mkdir(parents=True)

@@ -1,18 +1,20 @@
 # Triton candidate tuning
 
-`spawn_triton_tuning` submits one Call with two stages. The first stage uses CPU resources and no GPU.
-It compiles each candidate for a specified CUDA SM target and publishes one transient Artifact. The
-second stage holds one GPU lease. It loads the prepared variants, checks their results, and measures
-them in sequence. The service cleans up the transient Artifact through its normal Call lifecycle.
+`spawn_triton_tuning` submits one Call with two stages. The first stage uses CPU resources and no
+GPU. It compiles each candidate for a specified CUDA SM target and publishes one transient Artifact.
+The second stage holds one GPU lease. It loads the prepared variants, checks their results, and
+measures them in sequence. The service cleans up the transient Artifact through its normal Call
+lifecycle.
 
 The helper requires Triton 3.6.0 on both stages. The workload image also needs PyTorch with CUDA
-support. The client machine does not need either package. Supply an image qualified for the requested
-GPU, and pass its CUDA SM as `target_arch` (for example, `103` for SM 10.3). The GPU stage rejects a
-different device architecture or Triton version. Pass the pool name as `gpu`, for example `gb300`;
-the helper requests one GPU from that pool.
+support. The client machine does not need either package. Supply an image qualified for the
+requested GPU, and pass its CUDA SM as `target_arch` (for example, `103` for SM 10.3). The GPU stage
+rejects a different device architecture or Triton version. Pass the pool name as `gpu`, for example
+`gb300`; the helper requests one GPU from that pool.
 
-See [the complete vector-add example](../examples/triton_tuning.py). Run it with a registered image
-that has those packages:
+See
+[the complete vector-add example](https://github.com/datacrunch-research/gpu-func/blob/main/examples/triton_tuning.py).
+Run it with a registered image that has those packages:
 
 ```sh
 python examples/triton_tuning.py --image YOUR_IMAGE --gpu YOUR_GPU_POOL --target-arch 103
@@ -37,11 +39,11 @@ combine with each candidate's `constexprs` to specialize the kernel. The `signat
 runtime pointer arguments and `constexpr` arguments. Candidate names and case keys must be unique.
 
 The result contains a winner and candidate records for each key. A candidate record separates CPU
-`compile_ms`, GPU `gpu_prepare_ms`, and GPU event `trial_ms`. `cache_hit` must be true for a prepared
-candidate. `gpu_compilations` counts cache misses, including new adaptive compilations. A report
-with no valid candidate has `status: "failed"` and retains each error. The helper limits initial
-variants to 128, CPU compilation to eight workers, adaptive candidates to 16 per key, and cache
-output to 128 MiB.
+`compile_ms`, GPU `gpu_prepare_ms`, and GPU event `trial_ms`. `cache_hit` must be true for a
+prepared candidate. `gpu_compilations` counts cache misses, including new adaptive compilations. A
+report with no valid candidate has `status: "failed"` and retains each error. The helper limits
+initial variants to 128, CPU compilation to eight workers, adaptive candidates to 16 per key, and
+cache output to 128 MiB.
 
 The result also records the observed GPU UUID, GPU name, driver API version, CUDA version, Triton
 version, and target SM. Use these fields when comparing runs.

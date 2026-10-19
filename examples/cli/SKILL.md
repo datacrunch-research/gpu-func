@@ -147,7 +147,9 @@ List the configured GPU pools before you select one:
 vfunc pool list
 ```
 
-Use an explicit pool name. The value `any` is a literal pool name, not a wildcard.
+Use an explicit pool name for a specific GPU family. With coordinator placement, `any` permits
+matching workers across pools when the deployment enables it. Course and `custom` commands require
+an explicit pool when several pools are configured.
 
 Ask the operator for available image names, GPU architecture values, and deployment limits.
 
@@ -164,8 +166,9 @@ vfunc run examples/cli/hello_cuda.cu \
   --nvcc-flag=-O3
 ```
 
-The worker selects the architecture for its GPU. Use `--arch` only when the source needs an
-explicit target.
+For `vfunc run`, select the compiler target with `--nvcc-flag=-arch=sm_103`, using the target for
+your GPU. This command has no `--arch` option and does not detect a remote GPU's architecture.
+Without an explicit flag, the image's compiler defaults apply. `custom` commands accept `--arch`.
 
 Arguments after `--` go to the compiled program:
 

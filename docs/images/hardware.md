@@ -119,8 +119,10 @@ The `required`, `observed`, and `image_architectures` fields explain unassigned 
 Calls retain their capacity-wait deadline. A timeout result retains the last observation under
 `error.details.compatibility`.
 
-After placement, `current_stage.image` contains the selected name, digest, and CPU architecture.
-Inside the workload, these values are available as:
+While a stage is active, `current_stage.image` contains the selected name, digest, and CPU
+architecture. The current stage disappears after completion. Save this information during execution
+if your application needs it later, or return the image identity from your workload. Inside the
+workload, these values are available as:
 
 - `GFAAS_BUILD_IMAGE_NAME`
 - `GFAAS_BUILD_IMAGE_DIGEST`

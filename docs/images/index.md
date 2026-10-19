@@ -1,18 +1,25 @@
 # Images
 
-An image is the container filesystem your function runs in. You select a prepared or remote image.
+An image supplies the filesystem, Python interpreter, libraries, and tools for a workload. The SDK
+selects an image registered with the service. It does not install your local packages remotely.
 
-| Kind           | Source                                                |
-| -------------- | ----------------------------------------------------- |
-| Prepared image | Already present on the GPU machines                   |
-| Remote image   | Content-addressed image published to an object origin |
+Ask the operator or image publisher for an accessible image name or immutable digest. Use a name for
+a maintained image. Use a digest to keep the same image across submissions.
 
-Operators install prepared images on each worker. Remote images let workers fetch filesystem objects
-through a local cache when a Call reads them. An operator can publish a shared remote image, and a
-producer can publish a private remote image with the separate image-producer tools. The SDK never
-receives storage credentials.
+```python
+import gfaas
 
-- [Prepared images](prepared.md)
-- [Remote images](remote.md)
-- [Hardware requirements and native images](hardware.md)
-- [Qualify a published image](qualification.md)
+image = gfaas.Image.from_registry("research-python")
+app = gfaas.App("research", image=image)
+```
+
+Registered images can be private to a service principal or available to other principals. An unknown
+or inaccessible reference fails. It does not fall back to a worker-local filesystem.
+
+Workers fetch missing filesystem objects into a local cache. The SDK does not receive storage
+credentials. Cache placement and storage configuration belong to the operator.
+
+- [Select a registered image](prepared.md).
+- [Use an immutable image reference](remote.md).
+- [Select native images and hardware](hardware.md).
+- [Check and share a published image](qualification.md).

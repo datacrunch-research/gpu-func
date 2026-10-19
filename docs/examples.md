@@ -1,7 +1,7 @@
 # Examples and API reference
 
-The repository contains standalone Python and CUDA examples in `examples/cli/`.
-Each example is a complete source file that the `vfunc` command can submit.
+The repository contains standalone Python and CUDA examples in `examples/cli/`. Each example is a
+complete source file that the `vfunc` command can submit.
 
 ## CUDA example
 
@@ -17,8 +17,8 @@ Run the same source on a local NVIDIA GPU:
 vfunc local run examples/cli/hello_cuda.cu
 ```
 
-The local and remote commands use the same source file. You can compare their
-structured results with the `--json` option.
+The local and remote commands use the same source file. You can compare their structured results
+with the `--json` option.
 
 ## Python example
 
@@ -41,10 +41,10 @@ management. Read [CUDA development workflows](cuda-workflows.md) for profiling a
 
 The repository contains two supervised fine-tuning examples:
 
-| Example | Model family |
-| --- | --- |
-| `examples/nemotron_lora.py` | Nemotron 3 Nano and the 9B pilot model |
-| `examples/nemotron_lightning_lora.py` | Nemotron 3.5 Lightning 30B-A3B |
+| Example                               | Model family                           |
+| ------------------------------------- | -------------------------------------- |
+| `examples/nemotron_lora.py`           | Nemotron 3 Nano and the 9B pilot model |
+| `examples/nemotron_lightning_lora.py` | Nemotron 3.5 Lightning 30B-A3B         |
 
 Install the optional tokenizer dependencies before you run these examples:
 
@@ -56,15 +56,15 @@ Read [Fine-tune Nemotron with LoRA](fine-tuning-nemotron.md) before you submit a
 
 ## API reference
 
-The SDK exports its public Python API from the `gfaas` package. Start with
-these modules:
+The SDK exports its public Python API from the `gfaas` package. Start with these modules:
 
-| Module | Purpose |
-| --- | --- |
-| `gfaas` | Applications, functions, Calls, Images, and Artifacts |
-| `gfaas.client` | The lower-level HTTP client |
-| `gfaas.cuda` | CUDA compilation, execution, and profiling |
-| `gfaas.artifacts` | Artifact references and declared outputs |
+| Module            | Purpose                                               |
+| ----------------- | ----------------------------------------------------- |
+| `gfaas`           | Applications, functions, Calls, Images, and Artifacts |
+| `gfaas.client`    | The lower-level HTTP client                           |
+| `gfaas.cuda`      | CUDA compilation, execution, and profiling            |
+| `gfaas.artifacts` | Artifact references and declared outputs              |
 
-The public REST contract is in the
-[fast-container OpenAPI document](https://github.com/datacrunch-research/fast-container/blob/main/openapi/gfunc.yaml).
+The lower-level client accepts REST request dictionaries. Read the source docstrings for exact
+method signatures. A complete Python reference belongs in this public guide; readers do not need
+access to the service's private implementation repository.

@@ -63,27 +63,28 @@ The older `gpu` option remains available. Values such as `gpu="any"` request one
 such as `gpu="0,1"` determine only the count and do not select physical device IDs. Do not use `gpu`
 and `gpu_count` together. The SDK rejects `gpu="all"` as ambiguous.
 
-The default `gpu_type="any"` names the literal `any` broker route. It is not a wildcard. Use a pool
-name that the operator provides.
+With coordinator placement, `gpu_type="any"` permits matching workers across pools. The deployment
+must enable `any`. A named pool restricts placement. Setting `gpu_type` alone does not request a
+GPU; set `gpu_count=1` for one GPU or `gpu_count=0` for a CPU-only Call.
 
 ## Limits
 
 Limits are deployment-specific. Ask your operator for the current values.
 
-| Limit                 | Scope                                                      |
-| --------------------- | ---------------------------------------------------------- |
-| Inline Artifact bytes | Small single-request uploads and serialized values         |
-| Upload session bytes  | Unfinished bytes reserved by one principal                 |
-| Log retention         | Combined stdout and stderr per Call                        |
-| Capacity wait         | Time before worker acceptance, including input preparation |
-| Execution timeout     | One active wall-clock deadline per run                     |
-| CPU and memory        | Per-Call request, bounded by the selected worker policy    |
-| Disk scratch          | Per-Call reservation and periodic logical-size check       |
-| Shared memory         | Per-Call `/dev/shm` size. Pages also count as memory.      |
-| Declared outputs      | File bytes across terminal outputs and checkpoint versions |
-| Artifact references   | 32 unique Artifacts per Call                               |
-| Tree entries          | Deployment-specific maximum number of entries              |
-| Tree path length      | Deployment-specific maximum UTF-8 path length              |
+| Limit                 | Scope                                                                   |
+| --------------------- | ----------------------------------------------------------------------- |
+| Inline Artifact bytes | Small single-request uploads; larger SDK uploads use multipart requests |
+| Upload session bytes  | Unfinished bytes reserved by one principal                              |
+| Log retention         | Combined stdout and stderr per Call                                     |
+| Capacity wait         | Time before worker acceptance, including input preparation              |
+| Execution timeout     | One active wall-clock deadline per run                                  |
+| CPU and memory        | Per-Call request, bounded by the selected worker policy                 |
+| Disk scratch          | Per-Call reservation and periodic logical-size check                    |
+| Shared memory         | Per-Call `/dev/shm` size. Pages also count as memory.                   |
+| Declared outputs      | File bytes across terminal outputs and checkpoint versions              |
+| Artifact references   | 32 unique Artifacts per Call                                            |
+| Tree entries          | Deployment-specific maximum number of entries                           |
+| Tree path length      | Deployment-specific maximum UTF-8 path length                           |
 
 The `wait()` deadline is a client-side limit. The function `capacity_wait` limits all time before
 worker acceptance. This time includes image preparation and Artifact staging. The function `timeout`
