@@ -8,7 +8,7 @@ import json
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from threading import RLock
 from types import MappingProxyType
 from typing import Any
@@ -18,6 +18,7 @@ from .app import active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
+from .kernel_target import compiler_compatibility, resolve_target
 from .triton_inputs import apply_writes, snapshot_inputs
 from .triton_kernel import _freeze
 from .triton_policy import TritonTuning, portable_callable
@@ -187,12 +188,14 @@ class CUDAKernel(Kernel):
         if probe.gpu and not probe.gpu.isdigit() and probe.gpu != "any":
             pool = probe.gpu
         probe = replace(probe, image=image, gpu=None, gpu_count=1, gpu_type=pool, outputs=())
-        target = probe.spawn().wait()
+        probe, target, probe_id = resolve_target(probe)
+        image = probe._resolve_image()
         compiler = replace(
             scope.bind(cuda_kernel_runner.compile_batch),
             image=image,
             gpu=None,
             gpu_count=0,
+            compatibility=compiler_compatibility(probe),
             gpu_type=pool,
             outputs=(ArtifactOutput.directory("compiled-cuda-kernel", "compiled-cuda-kernel"),),
             cpu_millicores=probe.cpu_millicores or 16000,
@@ -231,6 +234,9 @@ class CUDAKernel(Kernel):
             "source": self.source,
             "kernel_name": self.name,
             "target": target,
+            "image_digest": image.name,
+            "cpu_architecture": compiler_compatibility(probe).cpu_architecture,
+            "target_probe_call_id": probe_id,
             "variants": variants,
             "artifacts": [a for a, _ in compiled],
             "shards": [s for _, s in compiled],
@@ -265,11 +271,14 @@ class CUDAKernel(Kernel):
         if gpu.gpu and not gpu.gpu.isdigit() and gpu.gpu != "any":
             pool = gpu.gpu
         gpu = replace(gpu, image=image, gpu=None, gpu_count=1, gpu_type=pool, outputs=())
+        gpu, target, probe_id = resolve_target(gpu)
+        image = gpu._resolve_image()
         compiler = replace(
             scope.bind(cuda_kernel_runner.compile_batch),
             image=image,
             gpu=None,
             gpu_count=0,
+            compatibility=compiler_compatibility(gpu),
             gpu_type=pool,
             outputs=(ArtifactOutput.directory("compiled-cuda-kernel", "compiled-cuda-kernel"),),
             cpu_millicores=gpu.cpu_millicores or 16000,
@@ -288,13 +297,17 @@ class CUDAKernel(Kernel):
             variant["id"] = hashlib.sha256(json.dumps(variant, sort_keys=True).encode()).hexdigest()
             if all(v["id"] != variant["id"] for v in variants):
                 variants.append(variant)
+        assert compiler.compatibility is not None
         identity = {
             "source": self.source,
             "name": self.name,
             "signature": self.signature,
             "variants": variants,
             "metadata": inputs["metadata"],
-            "image": asdict(image),
+            "image": image.name,
+            "cpu_architecture": compiler.compatibility.cpu_architecture,
+            "target": target,
+            "tuning": self.tuning.request() if self.tuning else None,
             "pool": pool,
             "env": gpu.env,
             "flags": self.nvcc_flags,
@@ -308,7 +321,6 @@ class CUDAKernel(Kernel):
         with self._lock:
             reused = cache_key in self._cache
             if not reused:
-                target = gpu.spawn().wait()
                 chunks = [
                     variants[i : i + self.variants_per_job]
                     for i in range(0, len(variants), self.variants_per_job)
@@ -340,6 +352,7 @@ class CUDAKernel(Kernel):
                     "results": [r for _, s in compiled for r in s["report"]["results"]],
                     "shards": [s for _, s in compiled],
                     "specialization": key,
+                    "target_probe_call_id": probe_id,
                     "input_metadata": inputs["metadata"],
                 }
                 artifacts = [a for a, _ in compiled]

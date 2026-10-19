@@ -77,6 +77,13 @@ def test_only_requested_binary_loaded_and_checksum_verified(tmp_path):
 
 def test_compile_tune_benchmark_cache_and_execute_share_environment():
     class Client:
+        def get_call(self, identity):
+            return {
+                "current_stage": {
+                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}
+                }
+            }
+
         def __init__(self):
             self.calls = []
 
@@ -156,7 +163,10 @@ def test_compile_tune_benchmark_cache_and_execute_share_environment():
     assert tuned is kernel.tuning_results[cold["specialization"]]
     assert len([c for c, _ in client.calls if c == "compile_batch"]) == 2
     assert len([c for c, _ in client.calls if c == "execute"]) == 1
-    assert all(request["image"].name == "image" for _, request in client.calls)
+    assert all(
+        request["image"].name == ("image" if name == "probe_target" else "sha256:" + "a" * 64)
+        for name, request in client.calls
+    )
     with pytest.raises(TypeError):
         warm["runtime_us"] = 2
     with pytest.raises(TypeError):
@@ -286,6 +296,13 @@ def test_compile_only_has_no_input_or_tuning_dependency():
     calls = []
 
     class Client:
+        def get_call(self, identity):
+            return {
+                "current_stage": {
+                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}
+                }
+            }
+
         def submit(self, **request):
             calls.append(request)
             name = request["function"].__name__
@@ -345,7 +362,9 @@ def test_cuda_benchmark_pipeline_runs_without_triton(monkeypatch, tmp_path):
     monkeypatch.setattr(
         triton_quick_runner, "l2_flush_buffer", lambda _: SimpleNamespace(numel=lambda: 256)
     )
-    ring = SimpleNamespace(sets=[0, 1], footprint_bytes=256, allocated_bytes=512)
+    ring = SimpleNamespace(
+        sets=[0, 1], footprint_bytes=256, allocated_bytes=512, requires_flush=False
+    )
     monkeypatch.setattr(triton_quick_runner, "InputRing", lambda *args: ring)
     monkeypatch.setattr(cloudpickle, "loads", lambda _: (None, None, None, None))
     records = {"candidate": {"status": "compiled", "binary": b"cubin"}}
