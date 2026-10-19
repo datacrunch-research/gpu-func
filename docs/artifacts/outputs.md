@@ -62,6 +62,49 @@ useful.
 The subscriber streams each file from the worker to the coordinator. The function does not receive
 coordinator or object-storage credentials.
 
+## Choose how long to keep an output
+
+`ArtifactOutput`, `ArtifactOutput.directory`, and `ArtifactCheckpoint` accept the same retention
+options:
+
+```python
+temporary = gfaas.ArtifactOutput("scratch", "scratch.bin", retention="call")
+kept = gfaas.ArtifactOutput.directory("adapter", "adapter", retention="keep")
+expiring = gfaas.ArtifactCheckpoint("snapshots", "snapshots", ttl_seconds=86400)
+```
+
+| Option             | Lifetime                                                              |
+| ------------------ | --------------------------------------------------------------------- |
+| `retention="keep"` | Retain until the owner explicitly deletes the Artifact.               |
+| `retention="call"` | Collect after the Call finishes and other consumers release the data. |
+| `ttl_seconds=N`    | Allow collection after N seconds, once references release the data.   |
+
+You can also specify `retention="expire"` with `ttl_seconds`. Keep and Call scope reject a duration.
+The server limits the expiry duration. Expiry starts at each Artifact's creation, including each
+checkpoint version. Result replay does not extend it.
+
+Without either option, final outputs and checkpoints stay kept. Intermediate stage outputs retain
+their existing temporary default. An explicit Keep policy preserves an intermediate output too.
+These options do not change the Python return value, stdout, stderr, or unpublished scratch files.
+
+Call-scoped outputs stay protected during all stages of the Call. Success, failure, cancellation,
+and timeout end that protection. Other consumers and kept directories can still prevent collection.
+Temporary outputs can disappear before you download them after completion. Keep checkpoints that you
+need for recovery in a later Call.
+
+A directory declaration covers its root and files. Existing explicit Artifact policies remain in
+effect. Shared data with an older Keep policy can remain kept. You can preserve a published
+temporary Artifact before collection:
+
+```python
+client.set_artifact_retention(artifact_id)
+```
+
+Keeping a directory root protects its children. Collection removes its live Call listing, but the
+Call result and events retain the historical ID. That ID can refer to deleted bytes. See
+[Artifact retention](upload-download.md#keep-an-artifact-or-set-its-expiry) for expiry, references,
+and manual cleanup.
+
 ## Publish a directory
 
 Use a directory output for model adapters, profiler reports, or another file set. The service keeps

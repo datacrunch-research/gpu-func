@@ -135,3 +135,30 @@ def test_checkpoint_rejects_an_overlong_version_path(
 
     with pytest.raises(ValueError, match="invalid checkpoint directory"):
         checkpoint.publish("x" * 256)
+
+
+@pytest.mark.parametrize("factory", [ArtifactOutput, ArtifactOutput.directory, ArtifactCheckpoint])
+def test_declared_retention_is_serialized_and_survives_callable_packaging(factory):
+    import cloudpickle
+
+    temporary = factory("scratch", "scratch", retention="call")
+    restored = cloudpickle.loads(cloudpickle.dumps(temporary))
+    assert restored.request()["retention"] == {"mode": "call"}
+    assert factory("kept", "kept", retention="keep").request()["retention"] == {"mode": "keep"}
+    assert factory("expiry", "expiry", ttl_seconds=600).request()["retention"] == {
+        "mode": "expire",
+        "ttl_seconds": 600,
+    }
+    assert "retention" not in factory("default", "default").request()
+    for policy in [
+        {"retention": "call", "ttl_seconds": 60},
+        {"retention": "keep", "ttl_seconds": 60},
+        {"retention": "expire"},
+        {"ttl_seconds": 0},
+        {"ttl_seconds": True},
+        {"ttl_seconds": 1.5},
+        {"retention": "unknown"},
+        {"retention": "", "ttl_seconds": 60},
+    ]:
+        with pytest.raises(ValueError):
+            factory("invalid", "invalid", **policy)
