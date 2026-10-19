@@ -10,14 +10,15 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 from typing import Any
 
-from . import cutlass_runner, triton_quick_runner
+from . import cutlass_runner
 from .app import Function, active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
+from .kernel_target import compiler_compatibility, resolve_target
 from .triton_inputs import apply_writes, snapshot_inputs
 from .triton_kernel import _freeze
 from .triton_policy import TritonTuning, portable_callable
@@ -165,11 +166,14 @@ class CutlassKernel(Kernel):
         invocation.gpu_function = replace(
             function, image=image, gpu=None, gpu_count=1, gpu_type=pool, outputs=()
         )
+        invocation.gpu_function, target, probe_id = resolve_target(invocation.gpu_function)
+        image = invocation.gpu_function._resolve_image()
         invocation.compiler = replace(
             scope.bind(cutlass_runner.compile_batch),
             image=image,
             gpu=None,
             gpu_count=0,
+            compatibility=compiler_compatibility(invocation.gpu_function),
             gpu_type=pool,
             cpu_millicores=function.cpu_millicores or 4000,
             memory_bytes=function.memory_bytes or 8 * 1024**3,
@@ -185,7 +189,9 @@ class CutlassKernel(Kernel):
             "arguments": self.argument_names,
             "variants": self.variants,
             "metadata": inputs["metadata"],
-            "image": asdict(image),
+            "image": image.name,
+            "target": target,
+            "compatibility": compiler_compatibility(invocation.gpu_function).request(),
             "env": function.env,
             "gpu_type": pool,
             "nvcc_flags": self.nvcc_flags,
@@ -206,17 +212,13 @@ class CutlassKernel(Kernel):
         with self._lock:
             reused = cache_key in self._cache
             if not reused:
-                probe = replace(
-                    invocation.gpu_function, handler=triton_quick_runner.probe_target
-                ).spawn()
-                target = probe.wait()
                 if (
                     self.architecture
                     and int(self.architecture.removeprefix("sm_").rstrip("af")) != target["arch"]
                 ):
                     raise ValueError("Configured architecture does not match the selected GPU")
                 artifacts, report = invocation._compile(target)
-                report["call_ids"].insert(0, probe.call_id)
+                report["call_ids"].insert(0, probe_id)
                 request = invocation._request(inputs, callbacks, target, artifacts)
                 if self.tuning:
                     report["benchmark"] = benchmark_shards(
