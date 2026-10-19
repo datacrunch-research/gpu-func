@@ -7,7 +7,7 @@ import hashlib
 import inspect
 import json
 import shlex
-from dataclasses import asdict, replace
+from dataclasses import replace
 from threading import RLock
 from types import MappingProxyType
 from typing import Any
@@ -27,6 +27,7 @@ from .cute_compat import (
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
 from .kernel_compilation import compile_shards
+from .kernel_target import compiler_compatibility, pin_target
 from .triton_inputs import apply_writes, snapshot_inputs
 from .triton_kernel import _freeze
 from .triton_policy import TritonTuning, portable_callable
@@ -281,12 +282,25 @@ class CuteDSLKernel(Kernel):
         library_version = (
             self.kernel.cute_version if isinstance(self.kernel, SourceEntry) else version()
         )
+        probe = self.gpu_function.spawn()
+        environment = probe.wait()
+        if environment["cute_version"] != library_version:
+            raise ValueError("Client and execution image must use the same CuTe DSL version")
+        self.target = environment["target"]
+        self.gpu_function = pin_target(self.gpu_function, self.target, probe.call_id)
+        self.compiler = replace(
+            self.compiler,
+            image=self.gpu_function.image,
+            compatibility=compiler_compatibility(self.gpu_function),
+        )
         specification = {
             "source": source,
             "variants": variants,
             "metadata": self.metadata,
             "cute_version": library_version,
-            "image": asdict(self.compiler._resolve_image()),
+            "image": self.compiler._resolve_image().name,
+            "target": self.target,
+            "compatibility": compiler_compatibility(self.gpu_function).request(),
             "gpu_type": self.gpu_function.gpu_type,
             "env": self.gpu_function.env,
             "compile_options": self.compile_options,
@@ -302,11 +316,6 @@ class CuteDSLKernel(Kernel):
         cache_key = (id(self.compiler.app.client), key)
         if cache_key in self._cache:
             return self._cache[cache_key], inputs, key, True
-        probe = self.gpu_function.spawn()
-        environment = probe.wait()
-        if environment["cute_version"] != library_version:
-            raise ValueError("Client and execution image must use the same CuTe DSL version")
-        self.target = environment["target"]
         report, call_id = compile_shards(
             self, source, kernel_name, library_version, variants, backend="cute"
         )

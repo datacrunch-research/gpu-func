@@ -21,6 +21,11 @@ def resolve_target(function: Function) -> tuple[Function, dict[str, Any], str]:
     """
     probe = replace(function, handler=probe_target, outputs=()).spawn()
     target = probe.wait()
+    return pin_target(function, target, probe.call_id), target, probe.call_id
+
+
+def pin_target(function: Function, target: dict[str, Any], probe_id: str) -> Function:
+    """Pin a completed probe, including probes that also check library versions."""
     if (
         not isinstance(target, dict)
         or target.get("backend") != "cuda"
@@ -29,7 +34,7 @@ def resolve_target(function: Function) -> tuple[Function, dict[str, Any], str]:
         or target.get("warp_size") != 32
     ):
         raise GfaasError("GPU target discovery returned an invalid target")
-    status = function.app.client.get_call(probe.call_id)
+    status = function.app.client.get_call(probe_id)
     image = (status.get("current_stage") or {}).get("image") or {}
     digest, architecture = image.get("digest"), image.get("architecture")
     if (
@@ -38,7 +43,7 @@ def resolve_target(function: Function) -> tuple[Function, dict[str, Any], str]:
         or architecture not in ("amd64", "arm64")
     ):
         raise GfaasError(
-            f"Target probe Call {probe.call_id} did not report its image digest and CPU architecture"
+            f"Target probe Call {probe_id} did not report its image digest and CPU architecture"
         )
     capability = f"{target['arch'] // 10}.{target['arch'] % 10}"
     requested = function.compatibility
@@ -50,14 +55,10 @@ def resolve_target(function: Function) -> tuple[Function, dict[str, Any], str]:
         )
     ):
         raise GfaasError("Target probe did not satisfy the requested hardware compatibility")
-    return (
-        replace(
-            function,
-            image=Image.from_registry(digest),
-            compatibility=Compatibility(architecture, (capability,)),
-        ),
-        target,
-        probe.call_id,
+    return replace(
+        function,
+        image=Image.from_registry(digest),
+        compatibility=Compatibility(architecture, (capability,)),
     )
 
 
