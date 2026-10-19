@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import sys
@@ -84,8 +85,20 @@ class Client:
         self.submission = None
         self.fail = fail
 
+    def get_call(self, call_id):
+        name = getattr(self, "probe_image", "compiler") + getattr(self, "registry_revision", "")
+        digest = (
+            name
+            if name.startswith("sha256:")
+            else "sha256:" + hashlib.sha256(name.encode()).hexdigest()
+        )
+        return {"current_stage": {"image": {"digest": digest, "architecture": "arm64"}}}
+
     def submit(self, **kwargs):
         if kwargs["function"].__name__ == "probe_target":
+            self.probe_image = (kwargs["image"].remote_source or {}).get(
+                "image_digest", kwargs["image"].name
+            )
             return SimpleNamespace(
                 call_id="call_probe", wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32}
             )
@@ -295,7 +308,7 @@ def test_large_configuration_set_fits_bounded_artifact_scanner():
 def test_sharding_bounds_inflight_jobs_preserves_order_and_call_identities():
     gate, lock = Barrier(3), Lock()
 
-    class ShardedClient:
+    class ShardedClient(Client):
         def __init__(self):
             self.requests = []
             self.active = self.peak = 0
@@ -342,7 +355,7 @@ def test_sharding_bounds_inflight_jobs_preserves_order_and_call_identities():
 
 
 def test_failed_shard_keeps_successful_results_and_failed_call_identity():
-    class FailedShardClient:
+    class FailedShardClient(Client):
         def __init__(self):
             self.index = 0
             self.lock = Lock()
@@ -381,7 +394,7 @@ def test_failed_shard_keeps_successful_results_and_failed_call_identity():
 
 
 def test_structural_failure_stops_queued_shards_without_losing_variants():
-    class BrokenClient:
+    class BrokenClient(Client):
         def __init__(self):
             self.submissions = 0
 
@@ -443,7 +456,8 @@ def test_existing_app_function_environment_and_resource_settings_are_forwarded()
     ):
         kernel[(1,)](None, 1, 64)
     request = client.submission
-    assert request["image"] is inherited and request["app_name"] == "existing-app"
+    assert request["image"].name == inherited.remote_source["image_digest"]
+    assert request["app_name"] == "existing-app"
     assert request["timeout_s"] == 91 and request["capacity_wait_s"] == 17
     assert request["cpu_millicores"] == 1000 and request["gpu_type"] == "gb300"
     assert request["memory_bytes"] == 2 * 1024**3
@@ -465,7 +479,8 @@ def test_context_required_and_image_override_is_resolved_at_invocation():
         pytest.raises(TritonExecutionNotImplementedError),
     ):
         kernel[(1,)](None, 1, 64)
-    assert client.submission["image"].name == "override"
+    assert client.probe_image == "override"
+    assert client.submission["image"].name == "sha256:" + hashlib.sha256(b"override").hexdigest()
     with App("missing").function(gpu="gb300"), pytest.raises(ValueError, match="no image"):
         kernel[(1,)](None, 1, 64)
 
@@ -569,7 +584,7 @@ def test_launch_cached_specializations_execute_every_call_and_reports_are_immuta
     with app.function(gpu="gb300"):
         assert kernel[(1,)](None, 1, 64) is None
         assert kernel[(1,)](None, 1, 64) is None
-    assert client.calls.count("probe_target") == 1
+    assert client.calls.count("probe_target") == 2
     assert client.calls.count("compile_batch") == 1
     assert client.calls.count("benchmark_cycle") == 1
     assert client.calls.count("execute_winner") == 2
@@ -587,6 +602,12 @@ def test_launch_cached_specializations_execute_every_call_and_reports_are_immuta
     with app.function(gpu="gb300", image=Image("other")):
         kernel[(1,)](None, 2, 64)
     assert len(kernel.tuning_results) == 3
+    # Moving the same registry alias must not reuse an old compiler artifact.
+    client.registry_revision = "updated"
+    with app.function(gpu="gb300", image=Image("other")):
+        kernel[(1,)](None, 2, 64)
+    assert len(kernel.tuning_results) == 4
+    assert client.calls.count("compile_batch") == 4
 
 
 def test_launch_single_configuration_executes_without_benchmarking():

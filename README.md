@@ -442,3 +442,9 @@ original autotuning report in `kernel.tuning_results`.
 
 See [the complete matmul example](examples/triton_matmul_benchmark.py) for 1,024
 configuration combinations, all tuning/benchmark options, and both cache paths.
+
+Managed kernel launches probe the selected GPU before they use a compiled cache. The probe Call
+identifies the image digest and CPU architecture. Compilation, tuning, and execution then use that
+digest and the same hardware requirements. CPU compilation does not reserve a GPU. A changed image
+alias or hardware target gets a separate cache entry. This check also runs for a cached launch and
+adds one probe Call; it does not repeat compilation or tuning when the inputs match.

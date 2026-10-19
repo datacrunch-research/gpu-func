@@ -8,7 +8,7 @@ import inspect
 import json
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict, replace
+from dataclasses import replace
 from threading import RLock
 from types import MappingProxyType
 from typing import Any
@@ -18,6 +18,7 @@ from .app import Function, active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
+from .kernel_target import compiler_compatibility, resolve_target
 from .triton_compat import (
     UnsupportedTritonKernelError,
     argument_type,
@@ -283,11 +284,21 @@ class TritonKernel(Kernel):
                 raise ValueError(
                     "Reset/restore declarations must refer to tensor arguments or None"
                 )
+        self.gpu_function, target, probe_id = resolve_target(self.gpu_function)
+        self.compiler = replace(
+            self.compiler,
+            image=self.gpu_function.image,
+            compatibility=compiler_compatibility(self.gpu_function),
+        )
+        self.target_arch = target["arch"]
+        assert self.gpu_function.compatibility is not None
         specialization = {
             "source": source,
             "variants": variants,
             "metadata": metadata,
-            "image": asdict(self.compiler._resolve_image()),
+            "image": self.compiler._resolve_image().name,
+            "compatibility": self.gpu_function.compatibility.request(),
+            "target": target,
             "gpu_type": self.gpu_function.gpu_type,
             "env": self.gpu_function.env,
             "triton_version": triton.__version__,
@@ -307,21 +318,16 @@ class TritonKernel(Kernel):
             if execute:
                 return self._execute(cached, inputs, args, argument_kwargs)
             return cached, inputs, key, True
-        probe = self.gpu_function.spawn()
-        target = probe.wait()
-        if not isinstance(target, dict) or target.get("backend") != "cuda":
-            raise GfaasError("GPU target discovery returned an invalid target")
-        self.target_arch = target["arch"]
         try:
             report, call_id = self._dispatch(source, jit.fn.__name__, triton.__version__, variants)
         except (TritonCompilationError, TritonExecutionNotImplementedError) as error:
-            error.report["target_probe_call_id"] = probe.call_id
-            error.report["call_ids"] = [probe.call_id, *error.call_ids]
+            error.report["target_probe_call_id"] = probe_id
+            error.report["call_ids"] = [probe_id, *error.call_ids]
             error.call_ids = error.report["call_ids"]
             raise
         compile_ids = report.get("call_ids", [call_id])
-        report["call_ids"] = [probe.call_id, *compile_ids]
-        report["target_probe_call_id"] = probe.call_id
+        report["call_ids"] = [probe_id, *compile_ids]
+        report["target_probe_call_id"] = probe_id
         report["next_phase"] = "execution"
         artifacts = []
         artifact_variants = {}
