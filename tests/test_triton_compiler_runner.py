@@ -13,10 +13,11 @@ import pytest
 from gfaas import triton_compiler_runner as runner
 
 
+@pytest.mark.parametrize("gluon", [False, True])
 @pytest.mark.parametrize("modern", [False, True])
 @pytest.mark.parametrize("serialized", [False, True])
 def test_old_and_new_astsource_interfaces_account_for_success_and_failure(
-    modern, serialized, monkeypatch, tmp_path
+    modern, serialized, gluon, monkeypatch, tmp_path
 ):
     received = []
     if modern:
@@ -50,6 +51,16 @@ def test_old_and_new_astsource_interfaces_account_for_success_and_failure(
     modules["triton"].__version__ = "3.8.0"
     modules["triton"].compile = compile
     modules["triton.compiler"].ASTSource = ASTSource
+    if gluon:
+        modules["triton.experimental"] = ModuleType("triton.experimental")
+        modules["triton.experimental.gluon"] = ModuleType("triton.experimental.gluon")
+        modules["triton.experimental.gluon"].GluonASTSource = ASTSource
+
+        class WrongFrontend:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("Gluon must not use the Triton AST frontend")
+
+        modules["triton.compiler"].ASTSource = WrongFrontend
     modules["triton.backends.compiler"].GPUTarget = Target
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -64,7 +75,7 @@ def test_old_and_new_astsource_interfaces_account_for_success_and_failure(
         for block in [64, 128]
     ]
     report = runner.compile_batch(
-        source="from types import SimpleNamespace\nkernel=SimpleNamespace(arg_names=['X','BLOCK'])",
+        source=f"from types import SimpleNamespace\nkernel=SimpleNamespace(arg_names=['X','BLOCK'], is_gluon=lambda: {gluon})",
         kernel_name="kernel",
         variants=json.dumps(variants) if serialized else variants,
         triton_version="3.8.0",

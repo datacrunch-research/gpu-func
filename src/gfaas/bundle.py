@@ -48,7 +48,9 @@ def _package_bytes(files: list[tuple[str, bytes]]) -> bytes:
 def _package_files(package_root: Path) -> list[tuple[str, bytes]]:
     files: list[tuple[str, bytes]] = []
     for path in sorted(package_root.rglob("*.py")):
-        relative = path.relative_to(package_root.parent).as_posix()
+        # ConfigMap mounts resolve to timestamp directories. Preserve the
+        # import namespace independently of the physical directory's name.
+        relative = "gfaas/" + path.relative_to(package_root).as_posix()
         files.append((relative, path.read_bytes()))
     return files
 
