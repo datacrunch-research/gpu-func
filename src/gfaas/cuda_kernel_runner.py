@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
-import importlib.metadata
 import inspect
 import json
 import os
@@ -33,46 +32,87 @@ def compile_batch(
     target: dict[str, Any],
     workers: int,
     nvcc_flags: list[str],
+    headers: Any = None,
+    headers_sha256: str | None = None,
 ) -> dict[str, Any]:
-    from gfaas.cuda_runner import _host_cxx_flags, _subprocess_env, _which
+    from gfaas.cuda_runner import _host_cxx_flags, _subprocess_env
 
     decoded = json.loads(variants)
+    if not decoded or not 1 <= workers <= 32:
+        raise ValueError("Invalid CUDA compiler batch or worker count")
     root = Path(os.environ["GFAAS_OUTPUT_ROOT"]) / "compiled-cuda-kernel"
     root.mkdir(parents=True)
     path = root / "kernel.cu"
-    path.write_text(source)
-    try:
-        nvcc = _which("nvcc")
-    except RuntimeError:
-        # NVIDIA wheels install the toolkit under site-packages, outside PATH.
-        nvcc = None
-        for distribution in importlib.metadata.distributions():
-            if "cuda-nvcc" not in distribution.metadata["Name"].lower():
-                continue
-            for entry in distribution.files or ():
-                if str(entry).endswith("/bin/nvcc"):
-                    candidate = Path(str(distribution.locate_file(entry)))
-                    if candidate.is_file() and os.access(candidate, os.X_OK):
-                        nvcc = str(candidate)
-                        break
-            if nvcc:
-                break
-        if not nvcc:
-            raise RuntimeError(
-                "nvcc was not found in PATH, /usr/local/cuda, or NVIDIA toolkit wheels"
-            ) from None
-    nvcc = str(nvcc)
+    if headers is None:
+        path.write_text(source)
+    else:
+        path.write_text(
+            """#include <cuda_runtime.h>
+    #define VFUNC_LAUNCH_ARGS unsigned int grid_x, unsigned int grid_y, unsigned int grid_z, unsigned int block_x, unsigned int block_y, unsigned int block_z, unsigned int shared_bytes, cudaStream_t stream
+    #define VFUNC_GRID dim3(grid_x, grid_y, grid_z)
+    #define VFUNC_BLOCK dim3(block_x, block_y, block_z)
+    #define VFUNC_SHARED_BYTES shared_bytes
+    #define VFUNC_STREAM stream
+    """
+            + source
+            + entrypoint_checks(kernel_name, decoded[0]["signature"], decoded[0]["entrypoint_kind"])
+        )
+    nvcc = find_nvcc()
     env = _subprocess_env(str(root))
+    if headers is not None:
+        header_root = root / "headers"
+        header_root.mkdir()
+        import io
+        import tarfile
+
+        data = headers.read_bytes()
+        if hashlib.sha256(data).hexdigest() != headers_sha256:
+            raise RuntimeError("ThunderKittens header checksum mismatch")
+        with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+            for member in tar:
+                name = Path(member.name)
+                if name.is_absolute() or ".." in name.parts or not member.isfile():
+                    raise RuntimeError("Unsafe ThunderKittens header archive")
+                handle = tar.extractfile(member)
+                assert handle is not None
+                output = header_root / name
+                output.parent.mkdir(parents=True, exist_ok=True)
+                output.write_bytes(handle.read())
+        master = (header_root / "kittens.cuh").read_text()
+        arch = target["arch"]
+        macro = f"KITTENS_SM{arch}"
+        if macro not in master:
+            macro = (
+                "KITTENS_BLACKWELL"
+                if 100 <= arch < 120
+                else "KITTENS_HOPPER"
+                if arch == 90
+                else "KITTENS_AMPERE"
+            )
+        nvcc_flags = [
+            "-std=c++20",
+            "--expt-relaxed-constexpr",
+            "--expt-extended-lambda",
+            "-I",
+            str(header_root),
+            f"-D{macro}",
+            *nvcc_flags,
+        ]
 
     def compile_one(variant: dict[str, Any]) -> dict[str, Any]:
         started = time.perf_counter()
-        output = root / (variant["id"] + ".cubin")
+        extension = ".so" if variant.get("entrypoint_kind", "kernel") == "launcher" else ".cubin"
+        output = root / (variant["id"] + extension)
         flags = [f"-D{k}={v}" for k, v in variant["defines"].items()]
         command = [
             nvcc,
             *_host_cxx_flags(),
             "-O3",
-            "--cubin",
+            *(
+                ["--shared", "-Xcompiler=-fPIC", "--cudart=none", "--cudadevrt=none"]
+                if extension == ".so"
+                else ["--cubin"]
+            ),
             f"-arch=sm_{target['arch']}",
             *nvcc_flags,
             *flags,
@@ -90,6 +130,7 @@ def compile_batch(
             row["diagnostics"] = result.stderr
         else:
             row["sha256"] = hashlib.sha256(output.read_bytes()).hexdigest()
+            row["extension"] = extension
         return row
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -97,6 +138,7 @@ def compile_batch(
     manifest = {
         "schema": "vfunc.cuda-kernel/v1",
         "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
+        "headers_sha256": headers_sha256,
         "kernel_name": kernel_name,
         "target": target,
         "results": results,
@@ -105,6 +147,10 @@ def compile_batch(
     }
     (root / "manifest.json").write_text(json.dumps(manifest))
     path.unlink()
+    import shutil
+
+    if headers is not None:
+        shutil.rmtree(header_root)
     return manifest
 
 
@@ -129,7 +175,7 @@ def load_binaries(
                 raise RuntimeError("Duplicate CUDA configuration")
             record = dict(row)
             if row["status"] == "compiled":
-                data = (root / (row["id"] + ".cubin")).read_bytes()
+                data = (root / (row["id"] + row.get("extension", ".cubin"))).read_bytes()
                 if hashlib.sha256(data).hexdigest() != row["sha256"]:
                     raise RuntimeError("CUDA binary checksum mismatch")
                 record["binary"] = data
@@ -161,17 +207,18 @@ def scalar_value(kind: str, value: Any) -> Any:
 def load_candidate(binary: bytes, kernel_name: str, variant: dict[str, Any], grid: Any) -> Any:
     import torch  # type: ignore[import-not-found]
 
+    if variant.get("entrypoint_kind", "kernel") == "launcher":
+        return load_host_launcher(binary, kernel_name, variant, grid)
+    # CUDA 12+ cudaSetDevice initializes the selected primary context, including
+    # for scalar-only kernels that did not allocate any input tensors.
+    torch.cuda.set_device(torch.cuda.current_device())
     cuda = ctypes.CDLL("libcuda.so.1")
-    context = ctypes.c_void_p()
-    check_cuda(cuda.cuCtxGetCurrent(ctypes.byref(context)))
-    if not context.value:
-        # PyTorch lazy initialization alone need not activate a primary context.
-        # Allocating through PyTorch establishes the context used by its streams.
-        torch.empty(1, device="cuda")
     module, function = ctypes.c_void_p(), ctypes.c_void_p()
     image = ctypes.create_string_buffer(binary)
     check_cuda(cuda.cuModuleLoadData(ctypes.byref(module), image))
     check_cuda(cuda.cuModuleGetFunction(ctypes.byref(function), module, kernel_name.encode()))
+    if variant["shared_memory"] > 48 * 1024:
+        check_cuda(cuda.cuFuncSetAttribute(function, 8, variant["shared_memory"]))
     cuda.cuLaunchKernel.argtypes = [
         ctypes.c_void_p,
         *([ctypes.c_uint] * 7),
@@ -179,10 +226,6 @@ def load_candidate(binary: bytes, kernel_name: str, variant: dict[str, Any], gri
         ctypes.POINTER(ctypes.c_void_p),
         ctypes.c_void_p,
     ]
-    if variant["shared_memory"]:
-        # CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES opts in above the
-        # default shared-memory allowance; the driver validates the GPU limit.
-        check_cuda(cuda.cuFuncSetAttribute(function, 8, variant["shared_memory"]))
     signature = inspect.Signature(
         [
             inspect.Parameter(n, inspect.Parameter.POSITIONAL_OR_KEYWORD)
@@ -289,8 +332,140 @@ def execute(
         raise RuntimeError("CUDA execution target changed")
     records = load_binaries(artifacts, source, kernel_name, target, {variant["id"]})
     grid, _ = cloudpickle.loads(callbacks)
-    candidate = load_candidate(records[variant["id"]]["binary"], kernel_name, variant, grid)
+    # Tensor allocation establishes the current CUDA context before the Driver
+    # API loads a raw cubin. Device discovery alone need not create that context.
     args, kwargs = SnapshotInputs(inputs, [], [], list(variant["signature"]))(inputs["metadata"])
+    candidate = load_candidate(records[variant["id"]]["binary"], kernel_name, variant, grid)
     candidate(*args, **kwargs)
     torch.cuda.synchronize()
     return snapshot_inputs(args, kwargs)
+
+
+def load_host_launcher(binary: bytes, kernel_name: str, variant: dict[str, Any], grid: Any) -> Any:
+    """Load a CUDA host bridge; preserve native TK layout/descriptor construction."""
+    import torch
+
+    from gfaas.cuda_kernel import dimensions3
+    from gfaas.cuda_runner import _workdir_root
+
+    # The toolkit's SONAME is resolved at runtime, never passed to nvcc as an input.
+    ctypes.CDLL("libcuda.so.1", mode=ctypes.RTLD_GLOBAL)
+    major = torch.version.cuda.split(".")[0]
+    runtime = ctypes.CDLL(f"libcudart.so.{major}", mode=ctypes.RTLD_GLOBAL)
+    folder = tempfile.TemporaryDirectory(prefix="vfunc-tk-launch-", dir=_workdir_root())
+    path = Path(folder.name) / "kernel.so"
+    path.write_bytes(binary)
+    library = ctypes.CDLL(str(path))
+    function = getattr(library, kernel_name)
+    function.restype = ctypes.c_int
+    function.argtypes = (
+        [ctypes.c_void_p if k == "pointer" else SCALARS[k] for k in variant["signature"].values()]
+        + [ctypes.c_uint] * 7
+        + [ctypes.c_void_p]
+    )
+    signature = inspect.Signature(
+        [
+            inspect.Parameter(n, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+            for n in variant["signature"]
+        ]
+    )
+
+    def candidate(*args: Any, **kwargs: Any) -> None:
+        bound = signature.bind(*args, **kwargs)
+        values = []
+        for name, kind in variant["signature"].items():
+            value = bound.arguments[name]
+            if kind == "pointer":
+                if value is not None and (not hasattr(value, "data_ptr") or not value.is_cuda):
+                    raise TypeError("CUDA pointers must be GPU tensors or None")
+                values.append(ctypes.c_void_p(value.data_ptr() if value is not None else 0))
+            else:
+                values.append(scalar_value(kind, value))
+        meta = {**bound.arguments, **variant["defines"], "block": tuple(variant["block"])}
+        launch = dimensions3(grid(meta) if callable(grid) else grid)
+        stream = ctypes.c_void_p(torch.cuda.current_stream().cuda_stream)
+        check_cuda(function(*values, *launch, *variant["block"], variant["shared_memory"], stream))
+
+    candidate._cuda_library = (runtime, library, folder)  # type: ignore[attr-defined]
+    return candidate
+
+
+def entrypoint_checks(name: str, signature: dict[str, str], kind: str) -> str:
+    """Compile-time ABI checks prevent malformed launches from reaching GPUs."""
+    count = len(signature) + (8 if kind == "launcher" else 0)
+    lines = [
+        "#include <tuple>",
+        "#include <type_traits>",
+        "template<class> struct __vfunc_fn;",
+        "template<class R, class... A> struct __vfunc_fn<R(*)(A...)> { using result=R; using args=std::tuple<A...>; };",
+        f"using __vfunc_entry = __vfunc_fn<decltype(&{name})>;",
+        f'static_assert(std::tuple_size_v<__vfunc_entry::args> == {count}, "vFunc argument count mismatch");',
+    ]
+    result = (
+        "(std::is_same_v<__vfunc_entry::result, int> || std::is_same_v<__vfunc_entry::result, cudaError_t>)"
+        if kind == "launcher"
+        else "std::is_same_v<__vfunc_entry::result, void>"
+    )
+    lines.append(f'static_assert({result}, "vFunc entry-point return type mismatch");')
+    for index, arg in enumerate(signature.values()):
+        typ = f"std::tuple_element_t<{index}, __vfunc_entry::args>"
+        if arg == "pointer":
+            check = f"std::is_pointer_v<{typ}> && !std::is_function_v<std::remove_pointer_t<{typ}>>"
+        elif arg.startswith(("int", "uint")):
+            size = 4 if arg.endswith("32") else 8
+            signed = "is_unsigned_v" if arg.startswith("uint") else "is_signed_v"
+            check = f"std::is_integral_v<{typ}> && std::{signed}<{typ}> && sizeof({typ}) == {size}"
+        else:
+            check = f"std::is_same_v<{typ}, {'float' if arg == 'float32' else 'double'}>"
+        lines.append(f'static_assert({check}, "vFunc argument {index} ABI mismatch");')
+    if kind == "launcher":
+        for index in range(len(signature), count - 1):
+            lines.append(
+                f'static_assert(std::is_same_v<std::tuple_element_t<{index}, __vfunc_entry::args>, unsigned int>, "Use VFUNC_LAUNCH_ARGS for launcher dimensions");'
+            )
+        lines.append(
+            f'static_assert(std::is_same_v<std::tuple_element_t<{count - 1}, __vfunc_entry::args>, cudaStream_t>, "Use VFUNC_LAUNCH_ARGS for launcher stream");'
+        )
+    return "\n" + "\n".join(lines) + "\n"
+
+
+def find_nvcc() -> str:
+    """Honor the image toolchain, including NVIDIA's pip-distributed compiler."""
+    import importlib.metadata
+
+    from gfaas.cuda_runner import _which
+
+    override = os.environ.get("CUDACXX")
+    if override:
+        if not Path(override).is_file() or not os.access(override, os.X_OK):
+            raise RuntimeError("CUDACXX does not identify an executable compiler")
+        return override
+    cuda_home = os.environ.get("CUDA_HOME") or os.environ.get("CUDA_PATH")
+    if cuda_home:
+        candidate = Path(cuda_home) / "bin" / "nvcc"
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    try:
+        return _which("nvcc")
+    except RuntimeError:
+        try:
+            distribution = importlib.metadata.distribution("nvidia-cuda-nvcc")
+        except importlib.metadata.PackageNotFoundError:
+            for distribution in importlib.metadata.distributions():
+                if "cuda-nvcc" in distribution.metadata["Name"].lower():
+                    for entry in distribution.files or []:
+                        candidate = Path(str(distribution.locate_file(entry)))
+                        if (
+                            entry.name == "nvcc"
+                            and entry.parent.name == "bin"
+                            and candidate.is_file()
+                            and os.access(candidate, os.X_OK)
+                        ):
+                            return str(candidate)
+            raise RuntimeError("The selected image must include the CUDA nvcc compiler") from None
+        for entry in distribution.files or []:
+            if entry.name == "nvcc" and entry.parent.name == "bin":
+                candidate = Path(str(distribution.locate_file(entry)))
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
+        raise RuntimeError("NVIDIA's compiler package contains no executable nvcc") from None
