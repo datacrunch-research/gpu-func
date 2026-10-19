@@ -428,3 +428,29 @@ If you omit the destination, the CLI uses the Artifact filename. If the Artifact
 the CLI uses its Artifact ID.
 
 Add `--json` to return the Artifact ID, destination, and media type as a JSON object.
+
+## Retire unused resources
+
+Preview a selected resource before retirement:
+
+```bash
+vfunc retire call "$call_id" --json
+vfunc retire function "$function_id" --json
+vfunc retire environment "$environment_id" --json
+```
+
+Without `--apply`, these commands only report blockers and Artifact references. Retirement is
+permanent.
+
+If the preview has no blockers, apply retirement:
+
+```bash
+vfunc retire call "$call_id" --apply --json
+```
+
+Retirement preserves history and independently retained Artifact bytes. Active Calls cannot retire.
+A Function requires no active Calls. An Environment requires all its Functions to be retired first.
+The command rechecks these conditions before it changes the resource.
+
+Repeated requests return the original retirement receipt. See
+[resource retirement](reference/client.md#resource-retirement) for the full rules.

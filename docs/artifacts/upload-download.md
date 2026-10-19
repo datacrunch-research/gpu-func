@@ -266,6 +266,11 @@ deletion while an Environment, Function, Call input, published result, or nonter
 references the Artifact. The API also rejects deletion of a blob while a tree refers to it. Delete
 the tree first when you no longer need either resource.
 
+A finished Call can still hold input and output references. Use
+[resource retirement](../reference/client.md#resource-retirement) to release them while retaining
+history. Retiring a Call does not delete its independently retained outputs. Functions and
+Environments can hold additional source references.
+
 ## Find Artifacts for your account
 
 `list_artifacts(after=None, limit=100)` returns one page of metadata. Pass its `next_cursor` as

@@ -21,7 +21,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import BoundedSemaphore, Event, Lock
-from typing import Any, Self
+from typing import Any, Literal, Self
 
 import httpx
 
@@ -833,6 +833,41 @@ class Client:
             f"/v1/artifacts/{artifact_id}",
             operation="artifact deletion",
         )
+
+    def preview_retirement(
+        self,
+        resource_kind: Literal["call", "function", "environment"],
+        resource_id: str,
+    ) -> dict[str, Any]:
+        """Show retirement blockers and Artifact references without changing the resource."""
+        return self._resource_retirement("GET", resource_kind, resource_id)
+
+    def retire_resource(
+        self,
+        resource_kind: Literal["call", "function", "environment"],
+        resource_id: str,
+    ) -> dict[str, Any]:
+        """Release live references while keeping history and independently retained Artifacts.
+
+        Retirement is permanent. Active Calls and resources with active consumers are rejected.
+        Repeat the request to retrieve its original receipt after an ambiguous response.
+        """
+        return self._resource_retirement("POST", resource_kind, resource_id)
+
+    def _resource_retirement(
+        self, method: str, resource_kind: str, resource_id: str
+    ) -> dict[str, Any]:
+        prefixes = {"call": "call_", "function": "fn_", "environment": "env_"}
+        prefix = prefixes.get(resource_kind)
+        if prefix is None or not re.fullmatch(re.escape(prefix) + r"[A-Za-z0-9_-]+", resource_id):
+            raise ValueError(
+                "resource kind and ID must identify one Call, Function, or Environment"
+            )
+        return self._request(
+            method,
+            f"/v1/{resource_kind}s/{resource_id}/retirement",
+            operation=f"{resource_kind} retirement",
+        ).json()
 
     def create_environment(
         self,
