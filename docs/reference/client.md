@@ -143,6 +143,11 @@ publication phases, timeouts, and partial-failure receipts.
 | `download_artifact_directory(artifact_id, destination)`    | `Path` after manifest and file verification              |
 | `delete_artifact(artifact_id)`                             | `None`; raises if the Artifact remains in use            |
 
+`preview_artifact_cleanup(artifact_ids, *, maximum_artifacts=100, maximum_bytes=64 * 1024**3)`
+returns a cleanup preview. `cleanup_artifacts(...)` uses the same arguments and applies deletion.
+Both return per-ID statuses and blocking references. See
+[bounded cleanup](../artifacts/upload-download.md#clean-up-an-explicit-inventory).
+
 Use file downloads for large results. Destination paths must not exist. A directory download retains
 the tree layout and read-only modes. Deleting a tree does not delete its child blobs.
 

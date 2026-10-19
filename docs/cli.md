@@ -444,6 +444,28 @@ vfunc artifact retain art_abc --ttl-seconds 86400
 These commands apply the policy immediately and print updated metadata as JSON. They do not delete
 referenced data. See [retention](artifacts/upload-download.md#keep-an-artifact-or-set-its-expiry).
 
+To preview deletion of an explicit selection:
+
+```bash
+vfunc artifact cleanup art_tree art_child --json
+```
+
+For a larger selection, use a JSON file containing an array of IDs:
+
+```bash
+vfunc artifact cleanup --ids-file selected-artifacts.json --json
+vfunc artifact cleanup --ids-file selected-artifacts.json --apply --json
+```
+
+Without `--apply`, the command only previews. With `--apply`, it can delete kept Artifacts if they
+are explicitly selected and unreferenced. It does not add child IDs or retire resources. Use
+`--maximum-artifacts` and `--maximum-bytes` to change the default limits of 100 Artifacts and 64 GiB
+per batch.
+
+The command prints JSON. Apply exits nonzero when items remain `in_use`, `limit`, or `pending`.
+Retain the report and repeat the same selection after resolving blockers. See
+[bounded cleanup](artifacts/upload-download.md#clean-up-an-explicit-inventory).
+
 ## Retire unused resources
 
 Preview a selected resource before retirement:
