@@ -55,6 +55,7 @@ __all__ = [
     "StageArtifactBinding",
     "TritonKernel",
     "TLXKernel",
+    "GluonKernel",
     "TritonTuning",
     "TritonBenchmark",
     "TritonPruning",
@@ -88,6 +89,7 @@ def __getattr__(name: str):
         return {"CudaSource": CudaSource, "compile_and_run": compile_and_run}[name]
     if name in {
         "TritonKernel",
+        "GluonKernel",
         "TritonQuickBenchmarkError",
         "UnsupportedTritonKernelError",
         "TritonCompilationError",

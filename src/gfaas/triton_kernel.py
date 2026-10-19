@@ -84,6 +84,8 @@ class TritonKernel(Kernel):
     Read immutable reports through tuning_results. Calls capture app.function settings.
     """
 
+    frontend = "triton"
+
     compiler: Function
     gpu_function: Function
     grid: Any
@@ -120,10 +122,10 @@ class TritonKernel(Kernel):
         self._lock = RLock()
 
     def _validate_kernel(self, kernel: Any) -> tuple[Any, list[dict[str, Any]] | None]:
-        return validate_kernel(kernel)
+        return validate_kernel(kernel, self.frontend)
 
     def _source_bundle(self, kernel: Any) -> str:
-        return source_bundle(kernel)
+        return source_bundle(kernel, self.frontend)
 
     @property
     def tuning_results(self) -> Any:
@@ -608,3 +610,15 @@ class TritonKernel(Kernel):
         ):
             raise _IncompleteCompilerReportError(result.call_id)
         return result.call_id, report
+
+
+class GluonKernel(TritonKernel):
+    """Compile, tune, execute and benchmark Gluon kernels through vFunc.
+
+    Accepts @gluon.jit and vanilla @triton.autotune wrapping @gluon.jit.
+    Uses the same constructor options, context, tensor transport and reports as
+    TritonKernel. Layouts can be constructed inside device code; non-scalar
+    constexpr arguments and host-side tensor descriptors remain unsupported.
+    """
+
+    frontend = "gluon"
