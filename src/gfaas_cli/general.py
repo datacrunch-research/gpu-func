@@ -191,6 +191,12 @@ def add_commands(commands: Any) -> None:
     download.add_argument("artifact_id")
     download.add_argument("destination", nargs="?")
     _add_json_option(download)
+    retain = artifact_commands.add_parser("retain", help="keep an Artifact or set its expiry")
+    retain.add_argument("artifact_id")
+    retain.add_argument(
+        "--ttl-seconds", type=int, help="allow collection after this duration; omit to keep"
+    )
+    _add_json_option(retain)
 
     pool = commands.add_parser("pool", help="inspect configured GPU pools")
     pool_commands = pool.add_subparsers(dest="pool_command", required=True)
@@ -562,6 +568,10 @@ def _call_command(client: Client, args: argparse.Namespace) -> int:
 
 
 def _artifact_command(client: Client, args: argparse.Namespace) -> int:
+    if args.artifact_command == "retain":
+        value = client.set_artifact_retention(args.artifact_id, ttl_seconds=args.ttl_seconds)
+        _write_json(value)
+        return 0
     if args.artifact_command != "download":
         raise AssertionError(f"unknown Artifact command {args.artifact_command!r}")
     metadata = client.get_artifact(args.artifact_id)

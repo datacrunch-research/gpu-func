@@ -17,7 +17,7 @@ The command groups have these purposes:
 | `vfunc run`        | Submit one Python or CUDA source file.          |
 | `vfunc local`      | Inspect or use a CUDA GPU on the local host.    |
 | `vfunc call`       | Inspect, watch, or cancel a durable Call.       |
-| `vfunc artifact`   | Download an Artifact.                           |
+| `vfunc artifact`   | Download an Artifact or change its retention.   |
 | `vfunc pool`       | List the configured GPU pools.                  |
 | `vfunc completion` | Generate shell-completion setup.                |
 | `vfunc custom`     | Compile, run, or profile a custom CUDA program. |
@@ -428,6 +428,21 @@ If you omit the destination, the CLI uses the Artifact filename. If the Artifact
 the CLI uses its Artifact ID.
 
 Add `--json` to return the Artifact ID, destination, and media type as a JSON object.
+
+To keep a published Artifact:
+
+```bash
+vfunc artifact retain art_abc
+```
+
+To allow collection after one day:
+
+```bash
+vfunc artifact retain art_abc --ttl-seconds 86400
+```
+
+These commands apply the policy immediately and print updated metadata as JSON. They do not delete
+referenced data. See [retention](artifacts/upload-download.md#keep-an-artifact-or-set-its-expiry).
 
 ## Retire unused resources
 
