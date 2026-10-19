@@ -173,3 +173,33 @@ with Client() as client:
 Use `submit()` when the SDK must package local code or serialize arguments. Raw resource methods do
 not perform that work or the SDK's hardware capability preflight. The service validates requests.
 The resource methods use `/v1/environments`, `/v1/functions`, and `/v1/calls` beneath `api_base`.
+
+## Resource retirement
+
+`preview_retirement(resource_kind, resource_id)` returns blockers and Artifact references without
+changing the resource. `resource_kind` is `call`, `function`, or `environment`.
+
+`retire_resource(resource_kind, resource_id)` permanently releases live references. It preserves
+execution history and independently retained Artifact bytes. It rejects active Calls, Functions with
+active Calls, and Environments with unretired Functions.
+
+```python
+with Client() as client:
+    preview = client.preview_retirement("call", call_id)
+    if not preview["blockers"]:
+        receipt = client.retire_resource("call", call_id)
+        print(receipt["retired_at"], receipt["artifact_ids"])
+```
+
+Retirement is permanent. New work cannot use retired definitions. Repeating retirement returns its
+original receipt. Repeating creation does not reactivate a retired definition. A replacement must
+have a different definition, such as a different name.
+
+The receipt lists the released Artifact IDs. It does not include tree children or permit deletion of
+unrelated data. A retired Call retains its request, result, events, and execution identities. Its
+live Artifact list becomes empty. Ordinary resource reads report `retired_at`. Historical Artifact
+IDs can refer to data that the owner later deletes.
+
+Use `delete_artifact()` separately for data you no longer need. Other consumers can still block
+deletion after one resource retires. Retirement does not change existing Artifact expiry or internal
+transient-output cleanup.

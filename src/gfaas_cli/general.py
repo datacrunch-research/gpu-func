@@ -177,6 +177,14 @@ def add_commands(commands: Any) -> None:
     artifacts.add_argument("call_id")
     _add_json_option(artifacts)
 
+    retire = commands.add_parser("retire", help="preview or apply resource retirement")
+    retire.add_argument("resource_kind", choices=("call", "function", "environment"))
+    retire.add_argument("resource_id")
+    retire.add_argument(
+        "--apply", action="store_true", help="release references permanently; keep Artifact bytes"
+    )
+    _add_json_option(retire)
+
     artifact = commands.add_parser("artifact", help="manage Artifacts")
     artifact_commands = artifact.add_subparsers(dest="artifact_command", required=True)
     download = artifact_commands.add_parser("download", help="download one Artifact")
@@ -600,7 +608,7 @@ def _completion_command(args: argparse.Namespace) -> int:
     return 0
 
 
-GENERAL_COMMANDS = frozenset({"run", "local", "call", "artifact", "pool", "completion"})
+GENERAL_COMMANDS = frozenset({"run", "local", "call", "artifact", "pool", "completion", "retire"})
 
 
 def accepts_program_args(args: argparse.Namespace) -> bool:
@@ -627,6 +635,11 @@ def dispatch(
             return _call_command(client, args)
         if args.command_name == "artifact":
             return _artifact_command(client, args)
+        if args.command_name == "retire":
+            operation = client.retire_resource if args.apply else client.preview_retirement
+            value = operation(args.resource_kind, args.resource_id)
+            _write_json(value) if args.json else print(json.dumps(value, indent=2, sort_keys=True))
+            return 0
         if args.command_name == "pool":
             return _pool_command(client, args)
     raise AssertionError(f"unknown command {args.command_name!r}")
