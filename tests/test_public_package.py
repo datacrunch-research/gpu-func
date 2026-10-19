@@ -120,6 +120,7 @@ def test_documentation_local_links_resolve() -> None:
         text = document.read_text(encoding="utf-8")
         # Code such as kernel[grid](args) is Python syntax, not a Markdown link.
         text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
+        text = re.sub(r"`[^`]+`", "", text)
         for match in MARKDOWN_LINK.finditer(text):
             target = unquote(match.group(1).split("#", 1)[0])
             if not target or "://" in target:

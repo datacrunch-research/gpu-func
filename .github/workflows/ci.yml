@@ -74,6 +74,31 @@ jobs:
       - name: Run tests
         run: python -m pytest -q
 
+  documentation:
+    name: Documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Install pinned mdBook
+        run: |
+          curl --fail --location --silent --show-error \
+            https://github.com/rust-lang/mdBook/releases/download/v0.4.52/mdbook-v0.4.52-x86_64-unknown-linux-gnu.tar.gz \
+            --output "${RUNNER_TEMP}/mdbook.tar.gz"
+          cd "${RUNNER_TEMP}"
+          echo 'c0b903f01dd8f4edc644372ad2b80b1fdddd12552d37b6a098657cbd8eddd768  mdbook.tar.gz' | sha256sum --check
+          mkdir mdbook-bin
+          tar -xzf mdbook.tar.gz -C mdbook-bin mdbook
+          echo "${RUNNER_TEMP}/mdbook-bin" >> "${GITHUB_PATH}"
+
+      - name: Build the book and check links and Python snippets
+        run: python3 scripts/check-docs.py
+
   package:
     name: Build and install package
     runs-on: ubuntu-24.04
