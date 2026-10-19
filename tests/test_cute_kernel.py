@@ -65,6 +65,11 @@ class FakeClient:
         self.phases = []
         self.requests = []
 
+    def get_call(self, identity):
+        return {
+            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
+        }
+
     def submit(self, **request):
         self.requests.append(request)
         name, data = request["function"].__name__, request["kwargs"]
@@ -199,7 +204,7 @@ def test_cold_and_cached_calls_share_tuning_and_distinct_gpu_benchmarks(launch_f
     assert first["runtime_us"] == 11
     assert {r["gpu_uuid"] for r in first["replicas"]} == {"gpu0", "gpu1", "gpu2"}
     assert client.phases.count("compile_batch") == 2
-    assert client.phases.count("probe_environment") == 1
+    assert client.phases.count("probe_environment") == 3 + int(launch_first)
     assert client.phases.count("benchmark_cycle") == 1
     assert client.phases.count("benchmark_selected_replicas") == 2
     assert client.phases.count("execute_winner") == 1 + int(launch_first)
