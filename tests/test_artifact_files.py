@@ -166,7 +166,9 @@ def test_directory_upload_reports_aggregate_progress(tmp_path: Path) -> None:
     artifact = client.upload_artifact_directory(source, progress=progress.append)
 
     assert artifact["id"] == "art_tree"
-    assert progress[-1].path in {source / "a.bin", source / "b.bin"}
+    assert progress[-1].path == source
+    assert progress[-1].phase == "published"
+    assert progress[-1].artifact_id == "art_tree"
     assert progress[-1].completed_bytes == 8
     assert progress[-1].total_bytes == 8
     assert progress[-1].transferred_bytes == 8

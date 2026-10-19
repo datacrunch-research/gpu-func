@@ -326,3 +326,126 @@ def test_cancellation_while_waiting_to_publish_does_not_send_request(
     assert cancel.is_set()
     assert service.trees == []
     assert len(service.artifacts) == (1 if operation == "tree" else 0)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "disconnect", "gateway"])
+def test_completion_recovers_lost_response_without_repeating_publication(
+    tmp_path: Path, failure: str
+) -> None:
+    service = UploadService()
+    source = tmp_path / "weights"
+    source.write_bytes(b"abcdefgh")
+    progress = []
+    completions = []
+
+    def intercept(request):
+        if request.url.path.endswith("/completion"):
+            completions.append(request)
+            assert progress[-1].phase == "publishing"
+            assert progress[-1].completed_bytes == 8
+            assert progress[-1].completed_files == 0
+            assert progress[-1].artifact_id is None
+            assert request.extensions["timeout"]["read"] == 600
+            with service.lock:
+                service.respond(request)
+            if failure == "gateway":
+                return httpx.Response(504)
+            error = httpx.ReadTimeout if failure == "timeout" else httpx.ReadError
+            raise error("response lost", request=request)
+        return None
+
+    service.before = intercept
+    with client_for(service) as client:
+        result = client.upload_artifact_file(source, progress=progress.append)
+    assert len(completions) == 1
+    assert len(service.puts) == 2
+    assert [item.phase for item in progress][-3:] == ["publishing", "checking", "published"]
+    assert progress[-1].artifact_id == result["id"]
+    assert progress[-1].completed_files == 1
+    assert all(item.upload_id == "0" for item in progress)
+
+
+@pytest.mark.parametrize("lookup_fails", [False, True])
+def test_completion_timeout_keeps_resume_id_without_claiming_publication(
+    tmp_path: Path, lookup_fails: bool
+) -> None:
+    service = UploadService()
+    source = tmp_path / "weights"
+    source.write_bytes(b"abcdefgh")
+    requests = []
+    progress = []
+
+    def intercept(request):
+        requests.append((request.method, request.url.path))
+        if request.url.path.endswith("/completion"):
+            raise httpx.ReadTimeout("", request=request)
+        if lookup_fails and request.method == "GET":
+            return httpx.Response(503)
+        return None
+
+    service.before = intercept
+    with client_for(service) as client:
+        with pytest.raises(ArtifactUploadError, match="publication did not respond") as error:
+            client.upload_artifact_file(source, progress=progress.append)
+        assert error.value.phase == "publishing"
+        assert error.value.upload_id == "0"
+        assert "600s" in str(error.value)
+        assert "GFAAS_UPLOAD_COMPLETION_TIMEOUT" in str(error.value)
+        assert "Resume with upload_id='0'" in str(error.value)
+        assert ("could not be confirmed" if lookup_fails else "may still be running") in str(
+            error.value
+        )
+        assert requests[-1] == ("GET", "/v1/artifact-uploads/0")
+        assert len([p for _, p in requests if p.endswith("/completion")]) == 1
+        assert all(item.phase != "published" for item in progress)
+        assert len(service.parts["0"]) == 2
+        service.before = lambda request: None
+        result = client.upload_artifact_file(source, upload_id="0", progress=progress.append)
+    assert len(service.puts) == 2
+    assert progress[-1].phase == "published"
+    assert progress[-1].artifact_id == result["id"]
+    assert progress[-1].reused_bytes == 8
+
+
+def test_completion_rejection_preserves_reason_without_status_lookup(tmp_path: Path) -> None:
+    service = UploadService()
+    source = tmp_path / "weights"
+    source.write_bytes(b"abcdefgh")
+
+    def intercept(request):
+        assert request.method != "GET"
+        if request.url.path.endswith("/completion"):
+            return httpx.Response(400, json={"detail": "digest mismatch"})
+        return None
+
+    service.before = intercept
+    with client_for(service) as client, pytest.raises(ArtifactUploadError) as error:
+        client.upload_artifact_file(source)
+    assert error.value.phase == "publishing"
+    assert "400: digest mismatch" in str(error.value)
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_tree_publication_has_its_own_progress_after_child_files(
+    tmp_path: Path, empty: bool
+) -> None:
+    service = UploadService()
+    if not empty:
+        (tmp_path / "data").write_bytes(b"abcdefgh")
+    progress = []
+
+    def intercept(request):
+        if request.url.path == "/v1/artifact-trees":
+            assert progress[-1].path == tmp_path
+            assert progress[-1].phase == "publishing"
+            assert progress[-1].artifact_id is None
+        return None
+
+    service.before = intercept
+    with client_for(service) as client:
+        tree = client.upload_artifact_directory(tmp_path, progress=progress.append)
+    assert progress[-1].phase == "published"
+    assert progress[-1].path == tmp_path
+    assert progress[-1].artifact_id == tree["id"]
+    assert progress[-1].completed_files == (0 if empty else 1)
+    assert progress[-1].completed_bytes == (0 if empty else 8)

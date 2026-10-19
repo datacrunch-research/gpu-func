@@ -8,7 +8,7 @@ import re
 import uuid
 from dataclasses import dataclass, fields, is_dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, BinaryIO, TextIO, cast
+from typing import Any, BinaryIO, Literal, TextIO, cast
 
 from .errors import SerializationError
 
@@ -69,6 +69,9 @@ class ArtifactRef:
         return self.path.read_text(encoding=encoding)
 
 
+ArtifactUploadPhase = Literal["transferring", "publishing", "checking", "published"]
+
+
 @dataclass(frozen=True)
 class ArtifactUploadProgress:
     """Progress for one file upload or one file within a tree upload."""
@@ -80,6 +83,9 @@ class ArtifactUploadProgress:
     reused_bytes: int
     completed_files: int = 0
     total_files: int = 1
+    phase: ArtifactUploadPhase = "transferring"
+    upload_id: str | None = None
+    artifact_id: str | None = None
 
 
 @dataclass(frozen=True)

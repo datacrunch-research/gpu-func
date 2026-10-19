@@ -29,6 +29,7 @@ from .artifacts import (
     TREE_ARTIFACT_MEDIA_TYPE,
     ArtifactCheckpoint,
     ArtifactOutput,
+    ArtifactUploadPhase,
     ArtifactUploadProgress,
     collect_artifact_ids,
 )
@@ -171,7 +172,9 @@ class Client:
 
         detail = _response_detail(response, problem)
         suffix = f": {detail}" if detail else ""
-        raise GfaasError(f"{operation} failed: {response.status_code}{suffix}")
+        raise GfaasError(
+            f"{operation} failed: {response.status_code}{suffix}", status_code=response.status_code
+        )
 
     def _upload_request(
         self, method: str, path: str, *, cancel: Event | None = None, **kwargs: Any
@@ -289,7 +292,12 @@ class Client:
         last_progress = (0, 0, 0)
 
         def report(
-            completed: int, transferred: int, reused: int, *, published: bool = False
+            completed: int,
+            transferred: int,
+            reused: int,
+            phase: ArtifactUploadPhase = "transferring",
+            *,
+            artifact_id: str | None = None,
         ) -> None:
             nonlocal last_progress
             last_progress = completed, transferred, reused
@@ -301,7 +309,10 @@ class Client:
                         total_bytes=size_bytes,
                         transferred_bytes=transferred,
                         reused_bytes=reused,
-                        completed_files=int(published),
+                        completed_files=int(phase == "published"),
+                        phase=phase,
+                        upload_id=str(session["id"]),
+                        artifact_id=artifact_id,
                     )
                 )
 
@@ -317,7 +328,7 @@ class Client:
                     return chunk
 
             artifact = self._upload_artifact_parts(session, read_part, size_bytes, report, cancel)
-        report(*last_progress, published=True)
+        report(*last_progress, "published", artifact_id=artifact["id"])
         return artifact
 
     def _artifact_upload_session(
@@ -347,7 +358,7 @@ class Client:
         session: dict[str, Any],
         read_part: Callable[[int, int], bytes],
         size_bytes: int,
-        progress: Callable[[int, int, int], None] | None = None,
+        progress: Callable[[int, int, int, ArtifactUploadPhase], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
         session_id = str(session["id"])
@@ -404,16 +415,18 @@ class Client:
             reused_bytes += size if reused else 0
             transferred_bytes += 0 if reused else size
             if progress is not None:
-                progress(completed_bytes, transferred_bytes, reused_bytes)
+                progress(completed_bytes, transferred_bytes, reused_bytes, "transferring")
 
+        phase = "transferring"
         try:
             check_cancelled(cancel)
             if session.get("artifact_id"):
+                phase = "checking"
+                if progress is not None:
+                    progress(size_bytes, 0, size_bytes, "checking")
                 artifact = self._upload_request(
                     "GET", f"/v1/artifacts/{session['artifact_id']}", operation="artifact lookup"
                 ).json()
-                if progress is not None:
-                    progress(size_bytes, 0, size_bytes)
                 return artifact
             run_uploads(
                 range((size_bytes + part_size - 1) // part_size),
@@ -422,18 +435,70 @@ class Client:
                 self.cfg.upload_concurrency,
             )
             check_cancelled(cancel)
-            artifact = self._upload_request(
+        except (GfaasError, httpx.HTTPError, OSError) as error:
+            cause = transfer_errors[0] if transfer_errors else error
+            raise ArtifactUploadError(session_id, str(cause), phase=phase) from cause
+
+        def report_phase(phase: ArtifactUploadPhase) -> None:
+            if progress is not None:
+                progress(completed_bytes, transferred_bytes, reused_bytes, phase)
+
+        report_phase("publishing")
+        return self._complete_artifact_upload(session_id, report_phase, cancel)
+
+    def _complete_artifact_upload(
+        self,
+        session_id: str,
+        report_phase: Callable[[ArtifactUploadPhase], None],
+        cancel: Event | None,
+    ) -> dict[str, Any]:
+        timeout = self.cfg.upload_completion_timeout_s
+        try:
+            return self._upload_request(
                 "POST",
                 f"/v1/artifact-uploads/{session_id}/completion",
                 operation="Artifact upload completion",
                 cancel=cancel,
+                timeout=httpx.Timeout(self.cfg.request_timeout_s, read=timeout),
             ).json()
-        except (GfaasError, httpx.HTTPError, OSError) as error:
-            cause = transfer_errors[0] if transfer_errors else error
-            raise ArtifactUploadError(session_id, str(cause)) from cause
-        if progress is not None and size_bytes == 0:
-            progress(0, 0, 0)
-        return artifact
+        except (GfaasError, httpx.HTTPError) as error:
+            ambiguous = isinstance(error, httpx.TransportError) or (
+                isinstance(error, GfaasError)
+                and error.status_code is not None
+                and error.status_code >= 500
+            )
+            if isinstance(error, httpx.ReadTimeout):
+                detail = (
+                    f"All parts reached the service, but publication did not respond within {timeout:g}s. "
+                    "Set GFAAS_UPLOAD_COMPLETION_TIMEOUT to allow a longer publication wait."
+                )
+            elif isinstance(error, httpx.TransportError):
+                detail = (
+                    "All parts reached the service, but the publication request failed without a response "
+                    f"({type(error).__name__})."
+                )
+            else:
+                detail = f"All parts reached the service. Publication request failed: {error}."
+            if ambiguous:
+                report_phase("checking")
+                try:
+                    session = self._upload_request(
+                        "GET",
+                        f"/v1/artifact-uploads/{session_id}",
+                        operation="Artifact upload status check",
+                    ).json()
+                    if session.get("artifact_id"):
+                        return self._upload_request(
+                            "GET",
+                            f"/v1/artifacts/{session['artifact_id']}",
+                            operation="artifact lookup",
+                        ).json()
+                    detail += " The session has no published Artifact yet; publication may still be running."
+                except (GfaasError, httpx.HTTPError) as lookup_error:
+                    detail += (
+                        f" Publication could not be confirmed ({type(lookup_error).__name__})."
+                    )
+            raise ArtifactUploadError(session_id, detail, phase="publishing") from error
 
     def create_artifact_file_upload(
         self,
@@ -541,6 +606,9 @@ class Client:
                                 reused_bytes=totals[2],
                                 completed_files=totals[3],
                                 total_files=total_files,
+                                phase=item.phase,
+                                upload_id=item.upload_id,
+                                artifact_id=item.artifact_id,
                             )
                         )
 
@@ -591,7 +659,25 @@ class Client:
         child_artifact_ids = list(
             dict.fromkeys(entry["artifact_id"] for entry in entries if entry["type"] == "file")
         )
+
+        def report_tree(phase: ArtifactUploadPhase, artifact_id: str | None = None) -> None:
+            if progress is not None:
+                progress(
+                    ArtifactUploadProgress(
+                        path=source,
+                        completed_bytes=totals[0],
+                        total_bytes=total_bytes,
+                        transferred_bytes=totals[1],
+                        reused_bytes=totals[2],
+                        completed_files=totals[3],
+                        total_files=total_files,
+                        phase=phase,
+                        artifact_id=artifact_id,
+                    )
+                )
+
         try:
+            report_tree("publishing")
             tree = self._upload_request(
                 "POST",
                 "/v1/artifact-trees",
@@ -606,6 +692,7 @@ class Client:
         except Exception as error:
             raise ArtifactTreeUploadError(child_artifact_ids) from error
         tree["child_artifact_ids"] = child_artifact_ids
+        report_tree("published", tree["id"])
         return tree
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:

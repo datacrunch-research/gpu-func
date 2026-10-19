@@ -96,10 +96,9 @@ def test_large_bytes_and_files_resume_after_part_and_completion_failures(
 
         with pytest.raises(ArtifactUploadError) as interrupted:
             upload()
-        with pytest.raises(ArtifactUploadError):
-            upload(interrupted.value.upload_id)
         result = upload(interrupted.value.upload_id)
         assert result["id"] == "art_large"
+        assert upload(interrupted.value.upload_id) == result
         assert sorted(requests) == list(range(9)), "accepted parts were transferred again"
 
 
