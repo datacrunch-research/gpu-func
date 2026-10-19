@@ -6,7 +6,7 @@ import hashlib
 import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, replace
+from dataclasses import replace
 from threading import RLock
 from types import MappingProxyType
 from typing import Any
@@ -18,6 +18,7 @@ from .errors import GfaasError
 from .helion_compat import configuration_dicts, installed_version, source_bundle, validate_kernel
 from .kernel import Kernel, KernelBenchmark
 from .kernel_results import apply_result
+from .kernel_target import compiler_compatibility, resolve_target
 from .triton_inputs import snapshot_inputs
 from .triton_kernel import _freeze
 from .triton_policy import TritonTuning, portable_callable
@@ -113,23 +114,31 @@ class HelionKernel(Kernel):
         if pool == "any" and gpu.gpu and not gpu.gpu.isdigit() and gpu.gpu != "any":
             pool = gpu.gpu
         gpu = replace(gpu, image=image, gpu=None, gpu_count=1, gpu_type=pool, outputs=())
+        gpu, target, probe_id = resolve_target(gpu)
+        image = gpu._resolve_image()
         compiler = replace(
             scope.bind(helion_compiler_runner.compile_batch),
             image=image,
             gpu=None,
             gpu_count=0,
+            compatibility=compiler_compatibility(gpu),
             gpu_type=pool,
             cpu_millicores=gpu.cpu_millicores or 16000,
             memory_bytes=gpu.memory_bytes or 8 * 1024**3,
             outputs=(ArtifactOutput.directory("compiled-helion", "compiled-helion"),),
         )
+        assert compiler.compatibility is not None
         key = hashlib.sha256(
             json.dumps(
                 {
                     "source": source,
                     "metadata": inputs["metadata"],
                     "configs": self.configurations,
-                    "image": asdict(image),
+                    "image": image.name,
+                    "compatibility": compiler.compatibility.request(),
+                    "target": target,
+                    "env": gpu.env,
+                    "tuning": self.tuning.request(),
                     "gpu_pool": pool,
                     "helion_version": installed_version(),
                     "settings": hashlib.sha256(settings).hexdigest(),
@@ -146,6 +155,7 @@ class HelionKernel(Kernel):
                 report = self._prepare_compile_tune(
                     gpu, compiler, source, settings, inputs, callbacks, names, installed_version()
                 )
+                report["call_ids"].insert(0, probe_id)
                 report["specialization"] = key
                 report["input_metadata"] = inputs["metadata"]
                 self._cache[cache_key] = report

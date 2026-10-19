@@ -54,7 +54,9 @@ class Client:
         self.phases.append(handler)
         self.sequence += 1
         identity = f"call_{self.sequence}"
-        if handler == "prepare":
+        if handler == "probe_target":
+            output = {"backend": "cuda", "arch": 103, "warp_size": 32}
+        elif handler == "prepare":
             variants = [
                 {
                     "id": hashlib.sha256(json.dumps(c, sort_keys=True).encode()).hexdigest(),
@@ -119,6 +121,11 @@ class Client:
         else:
             raise AssertionError(handler)
         return SimpleNamespace(call_id=identity, wait=lambda: output)
+
+    def get_call(self, identity):
+        return {
+            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
+        }
 
     def get_call_result(self, identity):
         return {"artifacts": [{"name": "compiled-helion", "artifact_id": "art_" + identity}]}
@@ -231,3 +238,13 @@ def test_changing_the_gpu_target_creates_a_new_specialization(native):
         assert torch.equal(kernel(x, y), x + y)
     assert client.phases.count("prepare") == 2
     assert len(kernel.tuning_results) == 2
+
+
+def test_changed_compiler_environment_recompiles(native):
+    client = Client()
+    kernel = gfaas.HelionKernel(native)
+    app = gfaas.App("helion", image=gfaas.Image("compiler"), client=client)
+    for flags in ("first", "second", "second"):
+        with app.function(gpu="gb300", env={"COMPILER_FLAG": flags}):
+            kernel(torch.ones(8), torch.ones(8))
+    assert client.phases.count("compile_batch") == 2
