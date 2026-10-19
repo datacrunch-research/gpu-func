@@ -198,6 +198,16 @@ def add_commands(commands: Any) -> None:
     )
     _add_json_option(retain)
 
+    cleanup = artifact_commands.add_parser("cleanup", help="preview or delete selected Artifacts")
+    cleanup.add_argument("artifact_ids", nargs="*")
+    cleanup.add_argument("--ids-file", type=Path, help="JSON array of selected Artifact IDs")
+    cleanup.add_argument(
+        "--apply", action="store_true", help="delete selected data, including kept Artifacts"
+    )
+    cleanup.add_argument("--maximum-artifacts", type=int, default=100)
+    cleanup.add_argument("--maximum-bytes", type=int, default=64 * 1024**3)
+    _add_json_option(cleanup)
+
     pool = commands.add_parser("pool", help="inspect configured GPU pools")
     pool_commands = pool.add_subparsers(dest="pool_command", required=True)
     pool_list = pool_commands.add_parser("list", help="list configured GPU pools")
@@ -568,6 +578,27 @@ def _call_command(client: Client, args: argparse.Namespace) -> int:
 
 
 def _artifact_command(client: Client, args: argparse.Namespace) -> int:
+    if args.artifact_command == "cleanup":
+        ids = args.artifact_ids
+        if args.ids_file is not None:
+            if ids:
+                raise CliError("use Artifact IDs or --ids-file, not both")
+            with args.ids_file.open("rb") as stream:
+                raw = stream.read(256 * 1024 + 1)
+            if len(raw) > 256 * 1024:
+                raise CliError("Artifact inventory exceeds 256 KiB")
+            ids = json.loads(raw)
+            if not isinstance(ids, list):
+                raise CliError("Artifact inventory must be a JSON array of IDs")
+        operation = client.cleanup_artifacts if args.apply else client.preview_artifact_cleanup
+        value = operation(
+            ids, maximum_artifacts=args.maximum_artifacts, maximum_bytes=args.maximum_bytes
+        )
+        _write_json(value)
+        return int(
+            args.apply
+            and any(item["status"] in {"in_use", "limit", "pending"} for item in value["items"])
+        )
     if args.artifact_command == "retain":
         value = client.set_artifact_retention(args.artifact_id, ttl_seconds=args.ttl_seconds)
         _write_json(value)

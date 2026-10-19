@@ -305,6 +305,45 @@ A finished Call can still hold input and output references. Use
 history. Retiring a Call does not delete its independently retained outputs. Functions and
 Environments can hold additional source references.
 
+## Clean up an explicit inventory
+
+For a bounded cleanup, preview a list of Artifact IDs:
+
+```python
+ids = ["art_tree", "art_child"]
+preview = client.preview_artifact_cleanup(ids, maximum_artifacts=100, maximum_bytes=64 * 1024**3)
+print(preview)
+
+# After inspecting the preview and confirming that these outputs are unwanted:
+report = client.cleanup_artifacts(ids, maximum_artifacts=100, maximum_bytes=64 * 1024**3)
+print(report)
+```
+
+These methods accept 1 to 1000 unique IDs. They select only the supplied IDs, including kept
+Artifacts. They do not retire resources or automatically add tree children. Include each unwanted
+child explicitly. Eligible trees are processed first; other trees still protect shared children.
+
+Preview makes no changes. Apply rechecks references, so newly acquired references can block removal.
+Each item reports its status and up to 20 blocking resource identities. The `blockers_truncated`
+flag indicates more references.
+
+| Status      | Meaning                                                        |
+| ----------- | -------------------------------------------------------------- |
+| `eligible`  | Preview selected the Artifact.                                 |
+| `in_use`    | A listed resource still requires it.                           |
+| `limit`     | The requested count or byte limit leaves it untouched.         |
+| `deleted`   | Metadata removal and storage cleanup completed.                |
+| `pending`   | Storage cleanup failed and remains queued for retry.           |
+| `not_found` | The ID is unknown to this owner or deletion already completed. |
+
+`selected_bytes` is a logical total, not measured physical space recovered. Shared content can
+remain stored after a successful deletion. The limits include resumed pending deletions.
+
+If a request fails or times out, repeat the same inventory. Durable cleanup records preserve work
+after metadata removal. Completed IDs return `not_found`, and pending work can resume. The server's
+periodic collector also retries storage cleanup. The SDK returns partial reports without raising an
+exception; inspect each item's status.
+
 ## Find Artifacts for your account
 
 `list_artifacts(after=None, limit=100)` returns one page of metadata. Pass its `next_cursor` as

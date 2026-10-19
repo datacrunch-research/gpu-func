@@ -17,7 +17,7 @@ import stat
 import tempfile
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from threading import BoundedSemaphore, Event, Lock
@@ -714,6 +714,68 @@ class Client:
         tree["child_artifact_ids"] = child_artifact_ids
         report_tree("published", tree["id"])
         return tree
+
+    def preview_artifact_cleanup(
+        self,
+        artifact_ids: Sequence[str],
+        *,
+        maximum_artifacts: int = 100,
+        maximum_bytes: int = 64 * 1024**3,
+    ) -> dict[str, Any]:
+        """Preview deletion of selected Artifacts without changing their references or bytes."""
+        return self._artifact_cleanup(artifact_ids, False, maximum_artifacts, maximum_bytes)
+
+    def cleanup_artifacts(
+        self,
+        artifact_ids: Sequence[str],
+        *,
+        maximum_artifacts: int = 100,
+        maximum_bytes: int = 64 * 1024**3,
+    ) -> dict[str, Any]:
+        """Delete a bounded selection and report blockers or pending storage cleanup per ID."""
+        return self._artifact_cleanup(artifact_ids, True, maximum_artifacts, maximum_bytes)
+
+    def _artifact_cleanup(
+        self,
+        artifact_ids: Sequence[str],
+        apply: bool,
+        maximum_artifacts: int,
+        maximum_bytes: int,
+    ) -> dict[str, Any]:
+        if isinstance(artifact_ids, (str, bytes)) or not 1 <= len(artifact_ids) <= 1000:
+            raise ValueError("select 1 to 1000 Artifact IDs")
+        if any(
+            not isinstance(id, str) or not re.fullmatch(r"art_[A-Za-z0-9_-]{1,128}", id)
+            for id in artifact_ids
+        ):
+            raise ValueError("invalid Artifact ID in cleanup selection")
+        if len(set(artifact_ids)) != len(artifact_ids):
+            raise ValueError("Artifact IDs must be unique")
+        if (
+            isinstance(maximum_artifacts, bool)
+            or not isinstance(maximum_artifacts, int)
+            or not 1 <= maximum_artifacts <= 1000
+        ):
+            raise ValueError("maximum_artifacts must be an integer from 1 to 1000")
+        if (
+            isinstance(maximum_bytes, bool)
+            or not isinstance(maximum_bytes, int)
+            or not 1 <= maximum_bytes <= 2**63 - 1
+        ):
+            raise ValueError(
+                "maximum_bytes must be a positive integer no greater than 9223372036854775807"
+            )
+        return self._request(
+            "POST",
+            "/v1/artifact-cleanup",
+            operation="Artifact cleanup" if apply else "Artifact cleanup preview",
+            json={
+                "artifact_ids": list(artifact_ids),
+                "apply": apply,
+                "maximum_artifacts": maximum_artifacts,
+                "maximum_bytes": maximum_bytes,
+            },
+        ).json()
 
     def set_artifact_retention(
         self, artifact_id: str, *, ttl_seconds: int | None = None
