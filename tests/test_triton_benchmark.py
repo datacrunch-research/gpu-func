@@ -174,7 +174,7 @@ def test_long_kernel_final_events_have_at_least_25_iterations(monkeypatch):
     "settings,sets,graphs,calls,iterations,runtime",
     [
         (None, 300, 3, 100, 50, 2),
-        ({"graph_duration_ms": 0.1, "final_duration_ms": 2.0}, 220, 11, 20, 20, 10),
+        ({"graph_duration_ms": 0.1, "final_duration_ms": 2.0}, 220, 11, 20, 25, 10),
     ],
 )
 def test_graph_ring_pads_and_cycles_distinct_graphs_with_resets_outside_capture(
@@ -461,3 +461,20 @@ def test_graph_padding_falls_back_to_events_when_ring_memory_is_bounded(monkeypa
     result = final_benchmark(None, 5, ring, None, None)
     assert result["method"] == "events-ring"
     assert result["calls_per_graph"] == 0
+
+
+def test_l2_flush_uses_the_selected_device(monkeypatch):
+    from gfaas import triton_quick_runner as runner
+
+    def attribute(size, attribute, device):
+        assert attribute == 38 and device == 2
+        size._obj.value = 1024
+        return 0
+
+    monkeypatch.setattr(
+        runner.ctypes, "CDLL", lambda _: SimpleNamespace(cuDeviceGetAttribute=attribute)
+    )
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(current_device=lambda: 2), uint8="uint8", empty=lambda n, **kw: (n, kw)
+    )
+    assert runner.l2_flush_buffer(torch) == (2048, {"dtype": "uint8", "device": "cuda:2"})

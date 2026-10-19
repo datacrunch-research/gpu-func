@@ -162,7 +162,9 @@ def l2_flush_buffer(torch: Any) -> Any:
     status = cuda.cuDeviceGetAttribute(ctypes.byref(size), 38, torch.cuda.current_device())
     if status or size.value <= 0:
         raise RuntimeError("Cannot determine GPU L2 cache size")
-    return torch.empty(2 * size.value, dtype=torch.uint8, device="cuda:0")
+    return torch.empty(
+        2 * size.value, dtype=torch.uint8, device=f"cuda:{torch.cuda.current_device()}"
+    )
 
 
 def measure_quick(
@@ -653,7 +655,10 @@ def final_benchmark(
         graphs.append((graph, sets))
     torch.cuda.current_stream().wait_stream(capture_stream)
     torch.cuda.synchronize()
-    count = min(maximum, max(1, math.ceil(final_us / (z * estimate_us))))
+    count = min(
+        maximum,
+        max(settings.get("min_final_trials", 25), math.ceil(final_us / (z * estimate_us))),
+    )
     for _ in range(flush_iterations):
         flush.zero_()
     events = []
