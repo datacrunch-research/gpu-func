@@ -9,9 +9,14 @@ def probe_environment() -> dict[str, Any]:
     import platform
 
     from gfaas.cute_backend import version
-    from gfaas.triton_quick_runner import probe_target
+    from gfaas.triton_quick_runner import image_identity, probe_target
 
-    return {"target": probe_target(), "cute_version": version(), "cpu_arch": platform.machine()}
+    return {
+        "target": probe_target(),
+        "cute_version": version(),
+        "cpu_arch": platform.machine(),
+        "image": image_identity(),
+    }
 
 
 def benchmark_cycle(**kwargs: Any) -> dict[str, Any]:

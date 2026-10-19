@@ -55,7 +55,10 @@ class Client:
         self.sequence += 1
         identity = f"call_{self.sequence}"
         if handler == "probe_target":
-            output = {"backend": "cuda", "arch": 103, "warp_size": 32}
+            output = {
+                "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+            }
         elif handler == "prepare":
             variants = [
                 {
@@ -67,7 +70,10 @@ class Client:
             ]
             output = {
                 "variants": variants,
-                "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                "target": {
+                    "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+                },
                 "triton_version": "3.8.0",
             }
         elif handler == "compile_batch":
@@ -121,11 +127,6 @@ class Client:
         else:
             raise AssertionError(handler)
         return SimpleNamespace(call_id=identity, wait=lambda: output)
-
-    def get_call(self, identity):
-        return {
-            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
-        }
 
     def get_call_result(self, identity):
         return {"artifacts": [{"name": "compiled-helion", "artifact_id": "art_" + identity}]}

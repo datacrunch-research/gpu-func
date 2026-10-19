@@ -65,11 +65,6 @@ class FakeClient:
         self.phases = []
         self.requests = []
 
-    def get_call(self, identity):
-        return {
-            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
-        }
-
     def submit(self, **request):
         self.requests.append(request)
         name, data = request["function"].__name__, request["kwargs"]
@@ -79,6 +74,7 @@ class FakeClient:
                 "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
                 "cute_version": "4.8.0",
                 "cpu_arch": "aarch64",
+                "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
             }
         elif name == "compile_batch":
             report = {

@@ -38,7 +38,7 @@ def _suspend_cyclic_gc():
             gc.enable()
 
 
-def probe_target(device_index: int = 0) -> dict[str, Any]:
+def probe_target(device_index: int = 0, *, include_environment: bool = False) -> dict[str, Any]:
     cuda = ctypes.CDLL("libcuda.so.1")
     device, major, minor = ctypes.c_int(), ctypes.c_int(), ctypes.c_int()
     for name, args in (
@@ -49,7 +49,18 @@ def probe_target(device_index: int = 0) -> dict[str, Any]:
         status = getattr(cuda, name)(*args)
         if status:
             raise RuntimeError(f"{name} failed with CUDA status {status}")
-    return {"backend": "cuda", "arch": major.value * 10 + minor.value, "warp_size": 32}
+    target = {"backend": "cuda", "arch": major.value * 10 + minor.value, "warp_size": 32}
+    if include_environment:
+        return {"target": target, "image": image_identity()}
+    return target
+
+
+def image_identity() -> dict[str, Any]:
+    """Image identity injected by the coordinator after native image selection."""
+    return {
+        "digest": os.environ.get("GFAAS_BUILD_IMAGE_DIGEST"),
+        "architecture": os.environ.get("GFAAS_BUILD_IMAGE_ARCHITECTURE"),
+    }
 
 
 def select_rows(

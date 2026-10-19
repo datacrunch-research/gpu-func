@@ -137,7 +137,10 @@ class FakeClient:
         self.sequence += 1
         identity = f"call_{self.sequence}"
         if phase == "probe_target":
-            output = {"backend": "cuda", "arch": 103, "warp_size": 32}
+            output = {
+                "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+            }
         elif phase == "compile_batch":
             variants = json.loads(data["variants"])
             output = {"results": [{"id": v["id"], "status": "compiled"} for v in variants]}
@@ -169,11 +172,6 @@ class FakeClient:
                 else report(0)
             )
         return SimpleNamespace(call_id=identity, wait=lambda: output)
-
-    def get_call(self, identity):
-        return {
-            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
-        }
 
     def get_call_result(self, identity):
         return {"artifacts": [{"name": "compiled-cuda-kernel", "artifact_id": "art_" + identity}]}

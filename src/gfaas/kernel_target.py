@@ -17,15 +17,19 @@ def resolve_target(function: Function) -> tuple[Function, dict[str, Any], str]:
     """Probe through the public API, then pin the selected native image and ISA.
 
     Resolve again on each invocation: a registry name can move between launches.
-    The Call status supplies the actual image, including mixed-ISA selection.
+    The probe result retains the image selected by the coordinator.
     """
-    probe = replace(function, handler=probe_target, outputs=()).spawn()
-    target = probe.wait()
-    return pin_target(function, target, probe.call_id), target, probe.call_id
+    probe = replace(function, handler=probe_target, outputs=()).spawn(include_environment=True)
+    environment = probe.wait()
+    pinned = pin_target(function, environment, probe.call_id)
+    return pinned, environment["target"], probe.call_id
 
 
-def pin_target(function: Function, target: dict[str, Any], probe_id: str) -> Function:
+def pin_target(function: Function, environment: dict[str, Any], probe_id: str) -> Function:
     """Pin a completed probe, including probes that also check library versions."""
+    if not isinstance(environment, dict):
+        raise GfaasError("GPU target discovery returned an invalid environment")
+    target = environment.get("target")
     if (
         not isinstance(target, dict)
         or target.get("backend") != "cuda"
@@ -34,8 +38,9 @@ def pin_target(function: Function, target: dict[str, Any], probe_id: str) -> Fun
         or target.get("warp_size") != 32
     ):
         raise GfaasError("GPU target discovery returned an invalid target")
-    status = function.app.client.get_call(probe_id)
-    image = (status.get("current_stage") or {}).get("image") or {}
+    image = environment.get("image")
+    if not isinstance(image, dict):
+        image = {}
     digest, architecture = image.get("digest"), image.get("architecture")
     if (
         not isinstance(digest, str)

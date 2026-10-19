@@ -16,11 +16,14 @@ class Client:
         self.request = request
         return SimpleNamespace(
             call_id="call_probe",
-            wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+            wait=lambda: {
+                "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                "image": self.image,
+            },
         )
 
     def get_call(self, identity):
-        return {"current_stage": {"image": self.image}}
+        raise AssertionError("Completed Calls have no current stage; use the probe result")
 
 
 def test_mixed_isa_probe_pins_image_and_hardware_without_gpu_requirement_on_compiler():
@@ -35,6 +38,7 @@ def test_mixed_isa_probe_pins_image_and_hardware_without_gpu_requirement_on_comp
         app.function(env={"COMPILER_FLAG": "1"}) as scope,
     ):
         function, target, identity = resolve_target(scope.bind(lambda: None))
+    assert client.request["kwargs"] == {"include_environment": True}
     assert client.request["image"] == image
     assert client.request["compatibility"] == requested
     assert function.image.name == digest
@@ -57,3 +61,31 @@ def test_probe_rejects_hardware_outside_requested_set():
     function = app.function(gpu="any", compatibility=Compatibility("amd64")).bind(lambda: None)
     with pytest.raises(GfaasError, match="requested hardware"):
         resolve_target(function)
+
+
+@pytest.mark.parametrize("architecture", ["amd64", "arm64"])
+def test_probe_retains_coordinator_image_identity_in_result(monkeypatch, architecture):
+    from gfaas import triton_quick_runner as runner
+
+    class Driver:
+        def cuInit(self, flags):
+            return 0
+
+        def cuDeviceGet(self, device, index):
+            device._obj.value = index
+            return 0
+
+        def cuDeviceComputeCapability(self, major, minor, device):
+            major._obj.value, minor._obj.value = 10, 3
+            return 0
+
+    monkeypatch.setattr(runner.ctypes, "CDLL", lambda _: Driver())
+    digest = "sha256:" + "b" * 64
+    monkeypatch.setenv("GFAAS_BUILD_IMAGE_DIGEST", digest)
+    monkeypatch.setenv("GFAAS_BUILD_IMAGE_ARCHITECTURE", architecture)
+    target = {"backend": "cuda", "arch": 103, "warp_size": 32}
+    assert runner.probe_target() == target
+    assert runner.probe_target(include_environment=True) == {
+        "target": target,
+        "image": {"digest": digest, "architecture": architecture},
+    }
