@@ -117,7 +117,7 @@ import gfaas
 def show_progress(item: gfaas.ArtifactUploadProgress) -> None:
     percent = 100 if item.total_bytes == 0 else item.completed_bytes * 100 // item.total_bytes
     print(
-        f"{percent}% "
+        f"{item.phase}: {percent}% of bytes accepted "
         f"files={item.completed_files}/{item.total_files} "
         f"transferred={item.transferred_bytes} "
         f"reused={item.reused_bytes}"
@@ -132,15 +132,58 @@ with gfaas.Client() as client:
     )
 ```
 
-The client calls the callback after each completed part and after file publication. Parts can finish
+The client reports these phases:
+
+| Phase          | Meaning                                                                              |
+| -------------- | ------------------------------------------------------------------------------------ |
+| `transferring` | The client sends parts or checks parts accepted by an earlier attempt.               |
+| `publishing`   | All parts arrived. The client waits for the service to publish the Artifact.         |
+| `checking`     | The client checks a saved publication or looks up the outcome after a lost response. |
+| `published`    | The service confirmed publication. `artifact_id` identifies the Artifact.            |
+
+**100% of bytes accepted does not mean publication succeeded.** The service can still be verifying
+content or writing to storage. Wait for `published` or the upload method's successful return.
+`upload_id` identifies the resumable file session. `artifact_id` is set only on a `published`
+update.
+
+The client calls the callback after each completed part and when the phase changes. Parts can finish
 in any order. `completed_files` increases only after publication succeeds. A resumed upload reports
 accepted parts as `reused_bytes`. New parts contribute to `transferred_bytes`. A completed session
 reports all its bytes as reused.
 
 For a directory upload, the byte and file counts cover the complete directory. The `path` field
-identifies the file that produced the update. Directory callbacks are serialized but can use
-different threads. Keep callbacks short and avoid callback exceptions. Do not start another upload
-on the same client from a callback.
+identifies the file that produced the update, and `phase` describes that file. A child's `published`
+update does not confirm publication of the directory. After all children publish, the client reports
+`publishing` and then `published` for the directory's own path. The final update contains the tree
+Artifact ID. This also applies to empty directories.
+
+Directory callbacks are serialized but can use different threads. Keep callbacks short and avoid
+callback exceptions. Do not start another upload on the same client from a callback.
+
+### Publication timeouts and recovery
+
+File and multipart byte uploads use a separate completion-response timeout. The default is 600
+seconds. Set `GFAAS_UPLOAD_COMPLETION_TIMEOUT` or `ClientConfig.upload_completion_timeout_s` to
+change it. Ordinary requests and completion connection/write timeouts still use
+`GFAAS_REQUEST_TIMEOUT`, which defaults to 60 seconds. These are HTTP timeouts, not GPU execution
+timeouts. A proxy can end a request earlier than the client timeout.
+
+After a completion transport error or HTTP 5xx response, the client looks up the session once. If
+the session contains an Artifact ID, the client fetches its metadata and returns success. This
+recovers a publication whose response was lost. It does not repeat the completion POST
+automatically.
+
+If publication cannot be confirmed, `ArtifactUploadError` includes `upload_id` and
+`phase="publishing"`. The message distinguishes a completion timeout from a rejected request. An
+open session does not prove that publication stopped. A failed status lookup leaves the outcome
+unknown. Retain the upload ID and resume the same session as shown above. The service's session
+expiry still applies. Cancellation and transfer errors also retain the upload ID.
+
+Directory child failures appear in `ArtifactTreeUploadError.failures` and `upload_ids`. The final
+tree registration has no upload session; it uses the ordinary request timeout and does not use this
+completion recovery check.
+
+### JSON progress
 
 To emit machine-readable progress:
 

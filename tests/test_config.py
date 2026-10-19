@@ -22,3 +22,16 @@ def test_upload_concurrency_configuration_is_bounded() -> None:
     for value in (0, 17, True, 1.5):
         with pytest.raises(ValueError, match="upload_concurrency"):
             ClientConfig("https://example.invalid", None, 1, 30, upload_concurrency=value)
+
+
+def test_completion_timeout_is_independent_and_finite() -> None:
+    import pytest
+
+    config = ClientConfig.from_env(
+        {"GFAAS_REQUEST_TIMEOUT": "15", "GFAAS_UPLOAD_COMPLETION_TIMEOUT": "1200"}
+    )
+    assert config.request_timeout_s == 15
+    assert config.upload_completion_timeout_s == 1200
+    for value in (0, -1, float("inf"), float("nan"), True):
+        with pytest.raises(ValueError, match="upload_completion_timeout_s"):
+            ClientConfig("https://example.invalid", None, 1, 30, upload_completion_timeout_s=value)

@@ -9,6 +9,10 @@ from typing import Any
 class GfaasError(RuntimeError):
     """Base class for errors raised by the gfaas Python implementation."""
 
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        self.status_code = status_code
+        super().__init__(message)
+
 
 class UnsupportedGpuPoolError(GfaasError):
     """The deployment does not configure the requested GPU pool."""
@@ -25,10 +29,12 @@ class UnsupportedGpuPoolError(GfaasError):
 class ArtifactUploadError(GfaasError):
     """An interrupted transfer whose accepted parts can be reused with upload_id."""
 
-    def __init__(self, upload_id: str, detail: str) -> None:
+    def __init__(self, upload_id: str, detail: str, *, phase: str = "transferring") -> None:
         self.upload_id = upload_id
+        self.phase = phase
         super().__init__(
-            f"Artifact upload {upload_id} failed: {detail}. Resume with upload_id={upload_id!r}"
+            f"Artifact upload {upload_id} failed: {detail.rstrip('.')}. "
+            f"Resume with upload_id={upload_id!r}"
         )
 
 
