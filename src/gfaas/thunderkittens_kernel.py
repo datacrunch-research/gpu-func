@@ -13,7 +13,7 @@ import tempfile
 import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
 from types import MappingProxyType
@@ -24,6 +24,7 @@ from .app import Function, active_function_scope
 from .artifacts import ArtifactOutput, ArtifactRef
 from .errors import GfaasError
 from .kernel import Kernel, KernelBenchmark
+from .kernel_target import compiler_compatibility, resolve_target
 from .triton_inputs import apply_writes, snapshot_inputs
 from .triton_kernel import _freeze, portable_callable
 from .triton_policy import TritonTuning
@@ -91,6 +92,8 @@ class ThunderKittensKernel(Kernel):
     compiler: Function
     gpu_function: Function
     callbacks: bytes
+    target: dict[str, Any]
+    probe_id: str
 
     def __init__(
         self,
@@ -250,11 +253,15 @@ class ThunderKittensKernel(Kernel):
         invocation.gpu_function = replace(
             gpu, image=image, gpu=None, gpu_count=1, gpu_type=pool, outputs=()
         )
+        invocation.gpu_function, target, probe_id = resolve_target(invocation.gpu_function)
+        image = invocation.gpu_function._resolve_image()
+        invocation.target, invocation.probe_id = target, probe_id
         invocation.compiler = replace(
             invocation.compiler,
             image=image,
             gpu=None,
             gpu_count=0,
+            compatibility=compiler_compatibility(invocation.gpu_function),
             gpu_type=pool,
             cpu_millicores=invocation.compiler.cpu_millicores or 16000,
             memory_bytes=invocation.compiler.memory_bytes or 8 * 1024**3,
@@ -272,7 +279,10 @@ class ThunderKittensKernel(Kernel):
             "nvcc_flags": self.nvcc_flags,
             "tuning_policy": self.tuning.request() if self.tuning else None,
             "inputs": inputs["metadata"],
-            "image": asdict(image),
+            "image": image.name,
+            "compatibility": compiler_compatibility(invocation.gpu_function).request(),
+            "target": target,
+            "env": invocation.gpu_function.env,
             "gpu_type": pool,
             "callbacks_sha256": hashlib.sha256(callbacks).hexdigest(),
             "reset_to_zero": self.reset_to_zero,
@@ -348,10 +358,7 @@ class ThunderKittensKernel(Kernel):
         self, inputs: dict[str, Any], variants: list[dict[str, Any]], key: str, client: Any
     ) -> dict[str, Any]:
         started = time.perf_counter()
-        probe = self.gpu_function.spawn()
-        target = probe.wait()
-        if not isinstance(target, dict) or target.get("backend") != "cuda":
-            raise GfaasError("GPU target discovery returned an invalid target")
+        target = self.target
         if id(client) not in self._header_artifacts:
             with tempfile.TemporaryDirectory() as folder:
                 path = Path(folder) / "headers.tar.gz"
@@ -397,8 +404,8 @@ class ThunderKittensKernel(Kernel):
             "variants": variants,
             "results": [by_id[v["id"]] for v in variants],
             "shards": shards,
-            "call_ids": [probe.call_id, *[s["call_id"] for s in shards]],
-            "target_probe_call_id": probe.call_id,
+            "call_ids": [self.probe_id, *[s["call_id"] for s in shards]],
+            "target_probe_call_id": self.probe_id,
             "headers_artifact_id": header.artifact_id,
             "nvcc_flags": list(self.nvcc_flags),
             "headers_sha256": self.headers_sha256,
