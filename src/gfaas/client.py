@@ -42,6 +42,7 @@ from .errors import (
     GfaasError,
     UnsupportedGpuPoolError,
 )
+from .events import TERMINAL_CALL_STATES, EventWatcher
 from .image import Image
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
@@ -50,7 +51,6 @@ from .uploads import check_cancelled, run_uploads
 MAXIMUM_INLINE_ARTIFACT_BYTES = 1024 * 1024
 MAXIMUM_UPLOAD_PART_BYTES = 64 * 1024 * 1024
 
-TERMINAL_CALL_STATES = {"succeeded", "failed", "timed_out", "cancelled"}
 MAX_ERROR_JOURNEY_EVENTS = 40
 CLOUDPICKLE_MEDIA_TYPE = "application/vnd.gfunc.cloudpickle"
 PICKLE_MEDIA_TYPE = "application/vnd.python.pickle"
@@ -918,57 +918,16 @@ class Client:
         follow: bool = True,
         timeout_s: float | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield Call events from the public resumable SSE stream."""
-        if timeout_s is not None:
-            yield from self._iter_events_with_timeout(
-                call_id,
-                after=after,
-                follow=follow,
-                timeout_s=timeout_s,
-            )
-            return
-        params: dict[str, str] = {"follow": "true" if follow else "false"}
-        if after is not None:
-            params["after"] = after
-        with self._http.stream(
-            "GET",
-            f"/v1/calls/{call_id}/events",
-            params=params,
-            headers={"accept": "text/event-stream"},
-        ) as response:
-            if not response.is_success:
-                detail = _response_detail(response)
-                suffix = f": {detail}" if detail else ""
-                raise GfaasError(f"event stream failed: {response.status_code}{suffix}")
-            yield from _decode_event_stream(response.iter_lines())
-
-    def _iter_events_with_timeout(
-        self,
-        call_id: str,
-        *,
-        after: str | None,
-        follow: bool,
-        timeout_s: float,
-    ) -> Iterator[dict[str, Any]]:
-        """Poll durable events when the caller needs a total deadline."""
-        deadline = time.monotonic() + timeout_s
-        cursor = after
-        while True:
-            page = self.list_events(call_id, after=cursor, limit=1000)
-            terminal = False
-            for event in page.get("items", []):
-                event_cursor = event.get("cursor")
-                if event_cursor is not None:
-                    cursor = str(event_cursor)
-                yield event
-                if event.get("type") == "state" and event.get("state") in TERMINAL_CALL_STATES:
-                    terminal = True
-            if terminal or not follow:
-                return
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"call {call_id} event stream exceeded {timeout_s}s")
-            time.sleep(min(self.cfg.poll_interval_s, remaining))
+        """Yield durable events, with bounded recovery from temporary disconnects."""
+        yield from EventWatcher(
+            self._http,
+            call_id,
+            after=after,
+            follow=follow,
+            timeout_s=timeout_s,
+            request_timeout_s=self.cfg.request_timeout_s,
+            poll_interval_s=self.cfg.poll_interval_s,
+        )
 
     def get_call_logs(self, call_id: str) -> dict[str, Any]:
         """Collect all retained output events for a completed or running Call."""
@@ -1366,29 +1325,6 @@ def _remove_tree(path: Path) -> None:
             (Path(root) / name).chmod(0o700)
     path.chmod(0o700)
     shutil.rmtree(path)
-
-
-def _decode_event_stream(lines: Iterator[str]) -> Iterator[dict[str, Any]]:
-    data_lines: list[str] = []
-    for line in lines:
-        if line == "":
-            if data_lines:
-                try:
-                    event = json.loads("\n".join(data_lines))
-                except json.JSONDecodeError as error:
-                    raise GfaasError("event stream returned invalid JSON") from error
-                if not isinstance(event, dict):
-                    raise GfaasError("event stream payload must be an object")
-                yield event
-            data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        field, separator, value = line.partition(":")
-        if separator and value.startswith(" "):
-            value = value[1:]
-        if field == "data":
-            data_lines.append(value)
 
 
 def _result_error(result: dict[str, Any], state: str) -> str:

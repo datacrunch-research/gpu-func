@@ -202,6 +202,10 @@ def test_remote_result_retrieves_and_follows_stdout_and_stderr():
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/api/v1/calls/call_1":
+            return httpx.Response(200, json={"state": "succeeded"})
+        if request.url.params.get("after") == "4":
+            return httpx.Response(200, json={"items": [], "next_cursor": None})
         if request.url.params.get("follow") == "true":
             return httpx.Response(
                 200,
@@ -243,6 +247,8 @@ def test_log_iteration_with_timeout_polls_until_terminal_state():
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.url.path == "/api/v1/calls/call_1":
+            return httpx.Response(200, json={"state": "running"})
         assert request.url.path == "/api/v1/calls/call_1/events"
         if request.url.params.get("after") is None:
             return httpx.Response(
@@ -269,9 +275,10 @@ def test_log_iteration_with_timeout_polls_until_terminal_state():
         result = RemoteResult(client=client, job_id="call_1", gpu_type="gb300")
         assert list(result.iter_logs(timeout_s=1)) == [("stdout", "ready\n")]
 
-    assert len(requests) == 2
-    assert all(request.url.params["follow"] == "false" for request in requests)
-    assert requests[1].url.params["after"] == "0"
+    event_requests = [request for request in requests if request.url.path.endswith("/events")]
+    assert len(event_requests) == 2
+    assert all(request.url.params["follow"] == "false" for request in event_requests)
+    assert event_requests[1].url.params["after"] == "0"
 
 
 def test_log_iteration_total_timeout_is_bounded():

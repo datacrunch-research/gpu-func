@@ -82,6 +82,12 @@ The wait timeout ends local polling. It does not cancel the Call and is not a ha
 result download or decoding. HTTP operations have their own timeout. See
 [reconnection](../calls/lifecycle.md#reconnect-from-another-process).
 
+`iter_events()` automatically resumes after temporary connection errors. Its total deadline includes
+recovery. `iter_logs()` uses the same recovery rules. See
+[event recovery](../calls/events.md#automatic-recovery) for retry limits, HTTP errors, and cursor
+handling. Single-request methods such as `list_events()` and `get_call()` do not gain automatic
+retries.
+
 ## RemoteResult
 
 `submit()` and `Function.spawn()` create this handle. It retains `client`, `job_id`, `gpu_type`, and
