@@ -201,9 +201,11 @@ class Client:
         kind: str = "other",
         media_type: str = "application/octet-stream",
         filename: str | None = None,
+        ttl_seconds: int | None = None,
         upload_id: str | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
+        retention = _artifact_retention(ttl_seconds)
         check_cancelled(cancel)
         if len(data) > MAXIMUM_INLINE_ARTIFACT_BYTES or upload_id is not None:
             expected = {
@@ -212,6 +214,7 @@ class Client:
                 "filename": filename,
                 "digest": _content_digest(data),
                 "size_bytes": len(data),
+                "retention": retention,
             }
             with self._upload_files:
                 check_cancelled(cancel)
@@ -229,6 +232,10 @@ class Client:
             "Content-Digest": f"sha-256=:{digest}:",
             "X-Gfunc-Artifact-Kind": kind,
         }
+        if ttl_seconds is None:
+            headers["X-Gfunc-Retention"] = "keep"
+        else:
+            headers["X-Gfunc-Ttl-Seconds"] = str(ttl_seconds)
         if filename is not None:
             headers["X-Gfunc-Filename"] = filename
         response = self._upload_request(
@@ -248,11 +255,13 @@ class Client:
         kind: str = "other",
         media_type: str = "application/octet-stream",
         filename: str | None = None,
+        ttl_seconds: int | None = None,
         upload_id: str | None = None,
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
         """Upload a file with resumable, bounded-memory transfer requests."""
+        _artifact_retention(ttl_seconds)
         with self._upload_files:
             check_cancelled(cancel)
             return self._upload_artifact_file(
@@ -260,6 +269,7 @@ class Client:
                 kind=kind,
                 media_type=media_type,
                 filename=filename,
+                ttl_seconds=ttl_seconds,
                 upload_id=upload_id,
                 progress=progress,
                 cancel=cancel,
@@ -272,11 +282,13 @@ class Client:
         kind: str = "other",
         media_type: str = "application/octet-stream",
         filename: str | None = None,
+        ttl_seconds: int | None = None,
         upload_id: str | None = None,
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
         """Upload a file with resumable, bounded-memory transfer requests."""
+        retention = _artifact_retention(ttl_seconds)
         source = Path(path)
         size_bytes, digest = _file_identity(source)
         expected: dict[str, Any] = {
@@ -285,6 +297,7 @@ class Client:
             "filename": filename if filename is not None else source.name,
             "digest": digest,
             "size_bytes": size_bytes,
+            "retention": retention,
         }
         session = self._artifact_upload_session(expected, upload_id)
         _upload_part_size(session)
@@ -507,8 +520,10 @@ class Client:
         kind: str = "other",
         media_type: str = "application/octet-stream",
         filename: str | None = None,
+        ttl_seconds: int | None = None,
     ) -> dict[str, Any]:
         """Create a durable upload session before a resumable file transfer."""
+        retention = _artifact_retention(ttl_seconds)
         with self._upload_files:
             source = Path(path)
             size_bytes, digest = _file_identity(source)
@@ -522,6 +537,7 @@ class Client:
                     "filename": filename if filename is not None else source.name,
                     "digest": digest,
                     "size_bytes": size_bytes,
+                    "retention": retention,
                 },
             ).json()
 
@@ -531,10 +547,12 @@ class Client:
         *,
         kind: str = "input",
         filename: str | None = None,
+        ttl_seconds: int | None = None,
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
         """Upload a directory as one immutable tree Artifact."""
+        retention = _artifact_retention(ttl_seconds)
         source = Path(path)
         metadata = source.lstat()
         if source.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
@@ -617,6 +635,7 @@ class Client:
                     child,
                     kind=kind,
                     filename=child.name,
+                    ttl_seconds=ttl_seconds,
                     progress=report_file if progress is not None else None,
                     cancel=cancel,
                 )
@@ -687,6 +706,7 @@ class Client:
                     "kind": kind,
                     "filename": filename if filename is not None else source.name,
                     "entries": entries,
+                    "retention": retention,
                 },
             ).json()
         except Exception as error:
@@ -694,6 +714,17 @@ class Client:
         tree["child_artifact_ids"] = child_artifact_ids
         report_tree("published", tree["id"])
         return tree
+
+    def set_artifact_retention(
+        self, artifact_id: str, *, ttl_seconds: int | None = None
+    ) -> dict[str, Any]:
+        """Keep an Artifact, or make it eligible for collection after a duration."""
+        return self._request(
+            "PUT",
+            f"/v1/artifacts/{artifact_id}/retention",
+            operation="Artifact retention update",
+            json=_artifact_retention(ttl_seconds),
+        ).json()
 
     def get_artifact(self, artifact_id: str) -> dict[str, Any]:
         return self._request(
@@ -1455,3 +1486,11 @@ def _image_remote_source(image: Image | str) -> dict[str, Any] | None:
     if isinstance(image, Image):
         return dict(image.remote_source) if image.remote_source is not None else None
     raise GfaasError(f"unsupported image reference: {image!r}")
+
+
+def _artifact_retention(ttl_seconds: int | None) -> dict[str, Any]:
+    if ttl_seconds is None:
+        return {"mode": "keep"}
+    if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or ttl_seconds <= 0:
+        raise ValueError("ttl_seconds must be a positive integer")
+    return {"mode": "expire", "ttl_seconds": ttl_seconds}

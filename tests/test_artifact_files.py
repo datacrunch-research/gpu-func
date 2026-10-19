@@ -36,6 +36,7 @@ def test_file_upload_resumes_verified_parts(tmp_path: Path) -> None:
                     "filename": "input.bin",
                     "digest": digest(b"abcdefghij"),
                     "size_bytes": 10,
+                    "retention": {"mode": "keep"},
                     "part_size_bytes": 4,
                     "parts": [{"part_number": 0, "size_bytes": 4, "digest": digest(b"abcd")}],
                 },

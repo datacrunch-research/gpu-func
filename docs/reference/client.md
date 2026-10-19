@@ -118,6 +118,11 @@ The methods return Artifact metadata, except session creation, which returns the
 | `create_artifact_file_upload(path, ...)` | `kind="other"`, `media_type="application/octet-stream"`, `filename=None`                                         |
 | `upload_artifact_directory(path, ...)`   | `kind="input"`, `filename=None`, `progress=None`, `cancel=None`                                                  |
 
+Each upload method also accepts `ttl_seconds=None`. The default keeps the Artifact. A positive
+integer requests expiry after that many seconds. See
+[retention](../artifacts/upload-download.md#keep-an-artifact-or-set-its-expiry) for reference
+protection and session timing.
+
 All options after the first argument are keyword-only. `upload_id` resumes the same file or byte
 session. Directory uploads do not accept an aggregate resume ID. `cancel` is a `threading.Event`.
 File and directory progress callbacks receive `ArtifactUploadProgress`.
@@ -125,17 +130,18 @@ File and directory progress callbacks receive `ArtifactUploadProgress`.
 See [transfer and recovery](../artifacts/upload-download.md) for accepted file types, concurrency,
 publication phases, timeouts, and partial-failure receipts.
 
-## List, download, and delete Artifacts
+## List, download, retain, and delete Artifacts
 
-| Method                                                  | Return value                                            |
-| ------------------------------------------------------- | ------------------------------------------------------- |
-| `get_artifact(artifact_id)`                             | Metadata dictionary                                     |
-| `list_artifacts(*, after=None, limit=100)`              | Owner-scoped page with `items` and `next_cursor`        |
-| `iter_artifacts(*, limit=100)`                          | Iterator across owner-scoped pages                      |
-| `download_artifact(artifact_id)`                        | `(bytes, media_type)`; buffers the whole response       |
-| `download_artifact_file(artifact_id, destination)`      | `(Path, media_type)` after size and digest verification |
-| `download_artifact_directory(artifact_id, destination)` | `Path` after manifest and file verification             |
-| `delete_artifact(artifact_id)`                          | `None`; raises if the Artifact remains in use           |
+| Method                                                     | Return value                                             |
+| ---------------------------------------------------------- | -------------------------------------------------------- |
+| `set_artifact_retention(artifact_id, *, ttl_seconds=None)` | Updated metadata; omit the duration to keep the Artifact |
+| `get_artifact(artifact_id)`                                | Metadata dictionary                                      |
+| `list_artifacts(*, after=None, limit=100)`                 | Owner-scoped page with `items` and `next_cursor`         |
+| `iter_artifacts(*, limit=100)`                             | Iterator across owner-scoped pages                       |
+| `download_artifact(artifact_id)`                           | `(bytes, media_type)`; buffers the whole response        |
+| `download_artifact_file(artifact_id, destination)`         | `(Path, media_type)` after size and digest verification  |
+| `download_artifact_directory(artifact_id, destination)`    | `Path` after manifest and file verification              |
+| `delete_artifact(artifact_id)`                             | `None`; raises if the Artifact remains in use            |
 
 Use file downloads for large results. Destination paths must not exist. A directory download retains
 the tree layout and read-only modes. Deleting a tree does not delete its child blobs.

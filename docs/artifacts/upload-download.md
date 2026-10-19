@@ -243,21 +243,55 @@ The destination must not exist. A failed download removes its temporary tree.
 
 The metadata can also contain `filename` and `expires_at`.
 
-The coordinator deduplicates uploads by principal and digest. If that principal uploads the same
-bytes again, the original metadata remains.
+The coordinator can reuse an Artifact when its owner, content, metadata, and retention policy match.
+Different policies can produce different Artifact IDs that share stored bytes.
 
 ## Upload options
 
-| Option       | Meaning                                                                                         |
-| ------------ | ----------------------------------------------------------------------------------------------- |
-| `kind`       | One of `source`, `build_context`, `input`, `output`, `log`, `profile`, `diagnostic`, or `other` |
-| `media_type` | MIME type of the bytes                                                                          |
-| `filename`   | Optional file name                                                                              |
-| `progress`   | File or directory callback that receives `ArtifactUploadProgress` after parts and publication   |
-| `cancel`     | Optional `threading.Event` that stops new transfer work                                         |
+| Option        | Meaning                                                                                         |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| `kind`        | One of `source`, `build_context`, `input`, `output`, `log`, `profile`, `diagnostic`, or `other` |
+| `media_type`  | MIME type of the bytes                                                                          |
+| `ttl_seconds` | Optional positive lifetime in seconds; omit to keep the Artifact                                |
+| `filename`    | Optional file name                                                                              |
+| `progress`    | File or directory callback that receives `ArtifactUploadProgress` after parts and publication   |
+| `cancel`      | Optional `threading.Event` that stops new transfer work                                         |
 
 The deployment keeps finite limits for inline bytes, part size, open sessions, unfinished bytes, and
 session lifetime. It does not apply the inline byte limit to the completed file Artifact.
+
+## Keep an Artifact or set its expiry
+
+Uploads keep their data by default. To request expiry, pass `ttl_seconds` to a byte, file,
+directory, or session-creation method:
+
+```python
+artifact = client.upload_artifact_file("scratch.bin", ttl_seconds=86400)
+
+# Keep a useful result after the experiment.
+client.set_artifact_retention(artifact["id"])
+
+# Or allow collection one day from now.
+client.set_artifact_retention(artifact["id"], ttl_seconds=86400)
+```
+
+The server limits the requested duration. Metadata reports `retention.mode` and, for an expiring
+Artifact, `expires_at`. Updates start a new duration when the server accepts them. For a resumable
+upload, the duration starts at session creation. Supply the same `ttl_seconds` when resuming; a
+retry does not extend it. Allow enough time for upload and use.
+
+Directory uploads apply the requested policy to the tree and each uploaded file. Each duration
+starts when that file's session or the tree is created. Updating a tree later changes only its own
+policy. A kept tree protects its children while it exists, even if a child's expiry passes.
+
+Expiry prevents new references. Existing Calls, Functions, Environments, and trees protect stored
+bytes and downloads after expiry. The collector removes an expired Artifact only after those
+references are released. A finished Call still holds references until it is retired. Expiry does not
+promise immediate deletion.
+
+`set_artifact_retention(id)` cancels automatic cleanup while the Artifact's metadata still exists.
+It cannot restore data after deletion has started. Explicit keep does not prevent an owner from
+using `delete_artifact()` once the Artifact is no longer in use.
 
 ## Delete rules
 
