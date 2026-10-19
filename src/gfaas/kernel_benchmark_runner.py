@@ -132,3 +132,40 @@ def measure_entries(
         if not math.isfinite(final["runtime_us"]) or final["runtime_us"] <= 0:
             raise RuntimeError("Invalid final runtime")
         row.update(runtime_us=final["runtime_us"], final=final)
+
+
+def measure_candidates(
+    entries, rows, ring, torch, flush, evaluate, policy, gpu_uuid, final_only=False, estimates=None
+):
+    """Measure prepared candidates and return a shared benchmark report."""
+    measure_entries(
+        entries,
+        rows,
+        ring,
+        torch,
+        flush,
+        policy,
+        evaluate,
+        final_only=final_only,
+        estimates=estimates,
+    )
+    valid = [r for r in rows if r["status"] == "measured"]
+    best_row = min(valid, key=lambda r: r["runtime_us"]) if valid else None
+    return {
+        "schema": "vfunc.triton-benchmark/v1",
+        "status": "passed" if valid else "failed",
+        "gpu_uuid": gpu_uuid,
+        "results": rows,
+        "best_id": best_row["id"] if best_row else None,
+        "best_runtime_us": best_row["runtime_us"] if best_row else None,
+        "ring_sets": len(ring.sets),
+        "ring_footprint_bytes": ring.footprint_bytes,
+        "ring_allocated_bytes": ring.allocated_bytes,
+        "l2_bytes": flush.numel() // 2,
+        "explicit_eviction": ring.requires_flush,
+        "cache_assumption": (
+            "Input ring cannot exceed L2 within configured limits; explicitly evict before each timed call."
+            if ring.requires_flush
+            else "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic."
+        ),
+    }

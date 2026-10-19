@@ -16,6 +16,7 @@ from .artifacts import (
 )
 from .compatibility import Compatibility
 from .cuda_kernel import CUDAConfig, CUDAKernel
+from .cutlass_kernel import CutlassCompilationError, CutlassKernel, CutlassTuning
 from .errors import (
     ArtifactTreeUploadError,
     ArtifactUploadError,
@@ -50,6 +51,9 @@ __all__ = [
     "BenchmarkSettings",
     "Pruning",
     "App",
+    "CutlassKernel",
+    "CutlassTuning",
+    "CutlassCompilationError",
     "ThunderKittensKernel",
     "ThunderKittensConfig",
     "ThunderKittensCompilationError",
