@@ -79,13 +79,6 @@ def test_only_requested_binary_loaded_and_checksum_verified(tmp_path):
 
 def test_compile_tune_benchmark_cache_and_execute_share_environment():
     class Client:
-        def get_call(self, identity):
-            return {
-                "current_stage": {
-                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}
-                }
-            }
-
         def __init__(self):
             self.calls = []
 
@@ -94,7 +87,10 @@ def test_compile_tune_benchmark_cache_and_execute_share_environment():
             self.calls.append((function, request))
             variants = json.loads(data.get("variants", "[]"))
             if function == "probe_target":
-                result = {"backend": "cuda", "arch": 103, "warp_size": 32}
+                result = {
+                    "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+                }
             elif function == "compile_batch":
                 assert request["gpu_count"] == 0
                 result = {"results": [{"id": v["id"], "status": "compiled"} for v in variants]}
@@ -304,18 +300,14 @@ def test_compile_only_has_no_input_or_tuning_dependency():
     calls = []
 
     class Client:
-        def get_call(self, identity):
-            return {
-                "current_stage": {
-                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}
-                }
-            }
-
         def submit(self, **request):
             calls.append(request)
             name = request["function"].__name__
             result = (
-                {"backend": "cuda", "arch": 103, "warp_size": 32}
+                {
+                    "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+                }
                 if name == "probe_target"
                 else {
                     "results": [

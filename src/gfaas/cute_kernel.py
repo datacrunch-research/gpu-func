@@ -287,7 +287,7 @@ class CuteDSLKernel(Kernel):
         if environment["cute_version"] != library_version:
             raise ValueError("Client and execution image must use the same CuTe DSL version")
         self.target = environment["target"]
-        self.gpu_function = pin_target(self.gpu_function, self.target, probe.call_id)
+        self.gpu_function = pin_target(self.gpu_function, environment, probe.call_id)
         self.compiler = replace(
             self.compiler,
             image=self.gpu_function.image,

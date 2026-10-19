@@ -29,18 +29,16 @@ class Client:
     def __init__(self):
         self.calls = []
 
-    def get_call(self, identity):
-        return {
-            "current_stage": {"image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"}}
-        }
-
     def submit(self, **request):
         name = request["function"].__name__
         data = request["kwargs"]
         call_id = f"call_{len(self.calls)}"
         self.calls.append((name, request))
         if name == "probe_target":
-            result = {"backend": "cuda", "arch": 103, "warp_size": 32}
+            result = {
+                "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+                "image": {"digest": "sha256:" + "a" * 64, "architecture": "arm64"},
+            }
         elif name == "compile_batch":
             result = {
                 "results": [

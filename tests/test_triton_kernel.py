@@ -85,23 +85,24 @@ class Client:
         self.submission = None
         self.fail = fail
 
-    def get_call(self, call_id):
+    def probe_result(self):
         name = getattr(self, "probe_image", "compiler") + getattr(self, "registry_revision", "")
         digest = (
             name
             if name.startswith("sha256:")
             else "sha256:" + hashlib.sha256(name.encode()).hexdigest()
         )
-        return {"current_stage": {"image": {"digest": digest, "architecture": "arm64"}}}
+        return {
+            "target": {"backend": "cuda", "arch": 103, "warp_size": 32},
+            "image": {"digest": digest, "architecture": "arm64"},
+        }
 
     def submit(self, **kwargs):
         if kwargs["function"].__name__ == "probe_target":
             self.probe_image = (kwargs["image"].remote_source or {}).get(
                 "image_digest", kwargs["image"].name
             )
-            return SimpleNamespace(
-                call_id="call_probe", wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32}
-            )
+            return SimpleNamespace(call_id="call_probe", wait=self.probe_result)
         from gfaas.artifacts import collect_artifact_ids
 
         assert collect_artifact_ids((), kwargs["kwargs"]) == []
@@ -282,7 +283,7 @@ def test_wrong_variant_identity_cannot_report_success():
             if kwargs["function"].__name__ == "probe_target":
                 return SimpleNamespace(
                     call_id="call_probe",
-                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    wait=self.probe_result,
                 )
             return SimpleNamespace(
                 call_id="call_test",
@@ -317,7 +318,7 @@ def test_sharding_bounds_inflight_jobs_preserves_order_and_call_identities():
             if kwargs["function"].__name__ == "probe_target":
                 return SimpleNamespace(
                     call_id="call_probe",
-                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    wait=self.probe_result,
                 )
             with lock:
                 index = len(self.requests)
@@ -364,7 +365,7 @@ def test_failed_shard_keeps_successful_results_and_failed_call_identity():
             if kwargs["function"].__name__ == "probe_target":
                 return SimpleNamespace(
                     call_id="call_probe",
-                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    wait=self.probe_result,
                 )
             with self.lock:
                 index = self.index
@@ -402,7 +403,7 @@ def test_structural_failure_stops_queued_shards_without_losing_variants():
             if kwargs["function"].__name__ == "probe_target":
                 return SimpleNamespace(
                     call_id="call_probe",
-                    wait=lambda: {"backend": "cuda", "arch": 103, "warp_size": 32},
+                    wait=self.probe_result,
                 )
             self.submissions += 1
             raise GfaasError("service rejected submission")
