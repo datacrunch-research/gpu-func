@@ -284,3 +284,57 @@ def make_test_client(handler) -> Client:
         transport=httpx.MockTransport(handler),
     )
     return client
+
+
+@pytest.mark.parametrize("damage_cached_child", [False, True])
+def test_directory_download_reuses_only_verified_children_after_failure(
+    tmp_path: Path, damage_cached_child: bool
+) -> None:
+    from gfaas.errors import GfaasError
+
+    media = "application/vnd.gfaas.artifact-tree.v1+json"
+    contents = {"a": b"first", "b": b"second"}
+    manifest = json.dumps(
+        {
+            "schema": "gfaas.artifact-tree/v1",
+            "entries": [
+                {
+                    "path": name,
+                    "type": "file",
+                    "mode": 0o444,
+                    "artifact_id": f"art_{name}",
+                    "size_bytes": len(data),
+                    "digest": digest(data),
+                }
+                for name, data in contents.items()
+            ],
+        }
+    ).encode()
+    fail = True
+    received: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/artifacts/art_tree":
+            return httpx.Response(200, json={"layout": "tree", "media_type": media})
+        if request.url.path == "/v1/artifacts/art_tree/content":
+            return artifact_response(manifest, media)
+        name = request.url.path.split("/")[-2].removeprefix("art_")
+        if name == "b" and fail:
+            return httpx.Response(403)
+        received.append(name)
+        return artifact_response(contents[name])
+
+    target = tmp_path / "tree"
+    with make_test_client(handler) as client, pytest.raises(GfaasError):
+        client.download_artifact_directory("art_tree", target)
+    assert not target.exists()
+    if damage_cached_child:
+        cached = list(client._transfers.root.rglob("contents/a"))
+        assert len(cached) == 1
+        cached[0].write_bytes(b"damaged")
+    fail = False
+    with make_test_client(handler) as client:
+        client.download_artifact_directory("art_tree", target)
+    assert {name: (target / name).read_bytes() for name in contents} == contents
+    assert received.count("a") == (2 if damage_cached_child else 1)
+    assert received.count("b") == 1

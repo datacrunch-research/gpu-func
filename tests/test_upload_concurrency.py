@@ -126,19 +126,13 @@ def test_parts_overlap_and_resume_lost_receipt_without_retransmission(tmp_path: 
 
     service.before = intercept
     with client_for(service) as client:
-        with pytest.raises(ArtifactUploadError, match="lost receipt") as error:
-            client.upload_artifact_file(source)
-        service.before = lambda request: None
         progress = []
-        result = client.upload_artifact_file(
-            source, upload_id=error.value.upload_id, progress=progress.append
-        )
-        again = client.upload_artifact_file(source, upload_id=error.value.upload_id)
+        result = client.upload_artifact_file(source, progress=progress.append)
+        again = client.upload_artifact_file(source, upload_id="0")
     assert result == again
     assert sorted(number for _, number in service.puts) == list(range(5))
     assert service.peak == 2
     assert progress[-1].completed_files == 1
-    assert progress[-1].reused_bytes >= 8
 
 
 def test_shared_budget_bounds_multiple_directories_and_keeps_tree_identity(tmp_path: Path) -> None:
@@ -166,10 +160,13 @@ def test_partial_directory_failure_reports_completed_children_and_failed_session
     (tmp_path / "a").write_bytes(b"aaaa")
     (tmp_path / "b").write_bytes(b"bbbb")
     pair = Barrier(2)
+    seen: set[str] = set()
 
     def intercept(request):
         if "/parts/" in request.url.path:
-            pair.wait(timeout=5)
+            if request.url.path not in seen:
+                seen.add(request.url.path)
+                pair.wait(timeout=5)
             uid = request.url.path.split("/")[-3]
             if service.sessions[uid]["filename"] == "b":
                 return httpx.Response(429, json={"detail": "upload quota"})
@@ -449,3 +446,34 @@ def test_tree_publication_has_its_own_progress_after_child_files(
     assert progress[-1].artifact_id == tree["id"]
     assert progress[-1].completed_files == (0 if empty else 1)
     assert progress[-1].completed_bytes == (0 if empty else 8)
+
+
+@pytest.mark.parametrize("expired", [False, True])
+def test_new_client_reuses_completed_directory_children_and_unfinished_session(
+    tmp_path: Path,
+    expired: bool,
+) -> None:
+    service = UploadService()
+    (tmp_path / "a").write_bytes(b"aaaa")
+    (tmp_path / "b").write_bytes(b"bbbb")
+
+    def reject_second_file(request: httpx.Request) -> httpx.Response | None:
+        if "/parts/" in request.url.path:
+            uid = request.url.path.split("/")[-3]
+            if service.sessions[uid]["filename"] == "b":
+                return httpx.Response(503)
+        return None
+
+    service.before = reject_second_file
+    with client_for(service, concurrency=1) as client, pytest.raises(ArtifactTreeUploadError):
+        client.upload_artifact_directory(tmp_path)
+    if expired:
+        service.artifacts[hashlib.sha256(b"aaaa").hexdigest()]["expires_at"] = (
+            "2000-01-01T00:00:00Z"
+        )
+    service.before = lambda request: None
+    with client_for(service, concurrency=1) as client:
+        client.upload_artifact_directory(tmp_path)
+    assert len(service.sessions) == (3 if expired else 2)
+    assert service.puts == ([("0", 0), ("2", 0), ("1", 0)] if expired else [("0", 0), ("1", 0)])
+    assert len(service.trees) == 1

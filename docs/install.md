@@ -76,14 +76,16 @@ export GFAAS_API_BASE=https://gpu.example.com/api
 
 The SDK reads these variables:
 
-| Variable                          | Meaning                                            | Default                     |
-| --------------------------------- | -------------------------------------------------- | --------------------------- |
-| `GFAAS_API_BASE`                  | Public API base ending in `/api`                   | `http://127.0.0.1:8000/api` |
-| `GFAAS_API_KEY`                   | Your API key                                       | none                        |
-| `GFAAS_POLL_INTERVAL`             | Result polling interval, in seconds                | `0.5`                       |
-| `GFAAS_REQUEST_TIMEOUT`           | HTTP request timeout, in seconds                   | `60`                        |
-| `GFAAS_UPLOAD_COMPLETION_TIMEOUT` | Multipart publication response timeout, in seconds | `600`                       |
-| `GFAAS_UPLOAD_CONCURRENCY`        | Concurrent upload limit per client, from 1 to 16   | `4`                         |
+| Variable                          | Meaning                                            | Default                                     |
+| --------------------------------- | -------------------------------------------------- | ------------------------------------------- |
+| `GFAAS_API_BASE`                  | Public API base ending in `/api`                   | `http://127.0.0.1:8000/api`                 |
+| `GFAAS_API_KEY`                   | Your API key                                       | none                                        |
+| `GFAAS_POLL_INTERVAL`             | Result polling interval, in seconds                | `0.5`                                       |
+| `GFAAS_REQUEST_TIMEOUT`           | HTTP request timeout, in seconds                   | `60`                                        |
+| `GFAAS_UPLOAD_COMPLETION_TIMEOUT` | Multipart publication response timeout, in seconds | `600`                                       |
+| `GFAAS_UPLOAD_CONCURRENCY`        | Concurrent upload limit per client, from 1 to 16   | `4`                                         |
+| `GFAAS_DOWNLOAD_CONCURRENCY`      | Concurrent directory child downloads, from 1 to 16 | `4`                                         |
+| `GFAAS_TRANSFER_CACHE_DIR`        | Base directory for private transfer recovery data  | `$XDG_CACHE_HOME/vfunc` or `~/.cache/vfunc` |
 
 The CLI also reads `GFAAS_GPU_TYPE` as its default pool selection. Python SDK calls use their
 explicit `gpu_type` argument. Neither interface stores the API key in a file.

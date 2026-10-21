@@ -163,6 +163,7 @@ source = { editable = "." }
 dependencies = [
     { name = "argcomplete" },
     { name = "cloudpickle" },
+    { name = "filelock" },
     { name = "httpx" },
 ]
 
@@ -181,6 +182,7 @@ training-example = [
 requires-dist = [
     { name = "argcomplete", specifier = ">=3.7,<4" },
     { name = "cloudpickle", specifier = ">=3.0" },
+    { name = "filelock", specifier = ">=3.32.5,<4" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", marker = "extra == 'training-example'", specifier = "==3.1.6" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },

@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -15,8 +16,12 @@ class ClientConfig:
     request_timeout_s: float
     upload_concurrency: int = 4
     upload_completion_timeout_s: float = 600
+    transfer_cache_dir: Path | None = None
+    download_concurrency: int = 4
 
     def __post_init__(self) -> None:
+        if type(self.download_concurrency) is not int or not 1 <= self.download_concurrency <= 16:
+            raise ValueError("download_concurrency must be an integer from 1 to 16")
         if type(self.upload_concurrency) is not int or not 1 <= self.upload_concurrency <= 16:
             raise ValueError("upload_concurrency must be an integer from 1 to 16")
         if (
@@ -34,6 +39,10 @@ class ClientConfig:
             api_key=env.get("GFAAS_API_KEY") or None,
             poll_interval_s=float(env.get("GFAAS_POLL_INTERVAL", "0.5")),
             request_timeout_s=float(env.get("GFAAS_REQUEST_TIMEOUT", "60")),
+            transfer_cache_dir=Path(env["GFAAS_TRANSFER_CACHE_DIR"])
+            if env.get("GFAAS_TRANSFER_CACHE_DIR")
+            else None,
+            download_concurrency=int(env.get("GFAAS_DOWNLOAD_CONCURRENCY", "4")),
             upload_concurrency=int(env.get("GFAAS_UPLOAD_CONCURRENCY", "4")),
             upload_completion_timeout_s=float(env.get("GFAAS_UPLOAD_COMPLETION_TIMEOUT", "600")),
         )

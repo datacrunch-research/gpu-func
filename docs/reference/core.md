@@ -106,3 +106,13 @@ and output transfer.
 `call_status_summary(status)` returns a short string from a Call status dictionary. It describes
 lifecycle, preparation, and placement where the server supplies those fields. It does not contact
 the service. Obtain the dictionary with `RemoteResult.status()` or `Client.get_call()`.
+
+## Transfer configuration
+
+`ClientConfig.transfer_cache_dir` accepts a `Path` for private transfer recovery data. The default
+uses the user cache directory. Partial downloads and upload session receipts survive client and
+process restarts. Successful operations remove their recovery data.
+
+`ClientConfig.download_concurrency` controls concurrent directory child downloads. It defaults to
+four and accepts integers from 1 to 16. Upload concurrency remains a separate limit. See
+[transfer recovery](../artifacts/upload-download.md#download-recovery).

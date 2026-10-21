@@ -53,10 +53,11 @@ artifact = client.upload_artifact_file(
 
 Store `session["id"]` in durable application state. Supply it again after an interrupted transfer.
 
-An interrupted byte or file upload raises `ArtifactUploadError` with its `upload_id`. Supply that ID
-and the same content and metadata to resume the upload. The client reuses verified parts. A
-completed session returns its original Artifact, including after a lost completion response. An
-expired session requires a new upload.
+The client retains unfinished upload session IDs in its private recovery cache. A later invocation
+with the same content and metadata resumes the session, including after a process restart.
+`ArtifactUploadError.upload_id` remains available for applications that manage their own receipts. A
+completed session returns its original Artifact after a lost completion response. An expired
+automatic session is replaced. An explicit expired upload ID reports an error.
 
 ```python
 from gfaas import ArtifactUploadError
@@ -101,10 +102,11 @@ One `Client` shares this limit across its automatic uploads. With a limit of N:
 Workers acquire a request slot before they read a part. Waiting parts do not hold payload buffers.
 Separate `Client` instances have separate limits.
 
-The service still enforces its session and unfinished-byte quotas. The client reports quota
-rejection and stops the failed operation. It does not automatically retry rejected requests or
-create replacement sessions. Existing requests finish before the method returns an error. A
-directory failure also waits for active child uploads.
+The service still enforces its session and unfinished-byte quotas. The client retries temporary part
+failures up to four attempts. It checks accepted part receipts after ambiguous responses.
+Authentication, invalid content, and HTTP `413` stop the operation without retries. Session creation
+is not blindly retried. Existing requests finish before the method returns an error. A directory
+failure also waits for active child uploads.
 
 ## Progress and cancellation
 
@@ -229,9 +231,10 @@ not delete these blob Artifacts. A blob can belong to another tree or another ap
 If a child upload or final tree creation fails, `ArtifactTreeUploadError.child_artifact_ids`
 contains the completed child uploads. This list includes children that finish while another child
 fails. `upload_ids` maps failed relative file paths to their resumable session IDs. `failures` maps
-failed relative file paths to error descriptions. Your application can resume these files
-individually or remove completed child Artifacts. The directory method does not automatically resume
-an entire tree.
+failed relative file paths to error descriptions. Repeat the directory upload with the same source
+and metadata to resume it. The client reuses available completed children and unfinished sessions.
+Expired or deleted children are uploaded again. Explicit session IDs remain available for manual
+recovery.
 
 The client registers the tree only after all children succeed. It sorts manifest entries by path, so
 concurrent completion does not change tree identity.
@@ -239,7 +242,9 @@ concurrent completion does not change tree identity.
 The directory download verifies the manifest and every file. It builds a temporary read-only tree
 and then renames that tree to the requested destination.
 
-The destination must not exist. A failed download removes its temporary tree.
+The destination must not exist. A failed download retains verified children in the private recovery
+cache. It removes an unfinished destination copy. A later invocation verifies cached children before
+reuse.
 
 The metadata can also contain `filename` and `expires_at`.
 
@@ -367,3 +372,34 @@ can fail with `artifact_in_use` when a durable resource still references the dat
 For a tree you own and no longer need, delete the tree before its unneeded child blobs. Retain the
 upload response's `child_artifact_ids` for that bookkeeping. Some children can still belong to other
 trees.
+
+## Download recovery
+
+File downloads request byte ranges of up to 8 MiB. The client retains partial data after a
+connection failure. A later invocation resumes that data, including from a new process. The client
+verifies the response range, content identity, total size, and complete SHA-256 digest. It exposes
+the destination only after verification succeeds. It never replaces an existing file.
+
+`download_artifact()`, `download_artifact_file()`, directory downloads, and result collection share
+this downloader. Buffered downloads and decoded results still need to fit in client memory. An older
+server that ignores ranges causes that file to restart after an interruption.
+
+Directory downloads transfer children concurrently. They retain completed children after failure and
+verify them against the manifest before reuse. Directory uploads also retain completed child
+receipts. Set `GFAAS_DOWNLOAD_CONCURRENCY` from 1 to 16 to control concurrent child downloads. The
+default is four.
+
+The recovery cache uses `$XDG_CACHE_HOME/vfunc/transfers`, or `~/.cache/vfunc/transfers`. Set
+`GFAAS_TRANSFER_CACHE_DIR` to choose another base directory. In Python, use
+`ClientConfig.transfer_cache_dir` with a `Path`. The cache is private and separates API credential
+scopes. Its receipts do not contain credentials.
+
+Successful operations remove their recovery data. After seven inactive days, unlocked workspaces
+expire automatically during subsequent use. Small lock files remain for coordination between
+clients. If local recovery data expires, the next transfer starts again. Published Artifacts remain
+unchanged. Allow disk space for partial data and the final destination copy.
+
+Connection failures stop after four failed attempts. Authentication failures, incorrect ranges,
+changed identities, and digest mismatches stop immediately. A digest mismatch removes damaged
+partial data. After the underlying fault is corrected, repeat the same SDK call or CLI download
+command. There is no need to submit the workload again.

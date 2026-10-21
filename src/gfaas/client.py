@@ -19,6 +19,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from threading import BoundedSemaphore, Event, Lock
 from typing import Any, Literal, Self
@@ -46,6 +47,7 @@ from .events import TERMINAL_CALL_STATES, EventWatcher
 from .image import Image
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
+from .transfers import RETRYABLE_STATUS, TRANSIENT_ERRORS, TransferManager, retry_request
 from .uploads import check_cancelled, run_uploads
 
 MAXIMUM_INLINE_ARTIFACT_BYTES = 1024 * 1024
@@ -131,6 +133,13 @@ class Client:
             timeout=self.cfg.request_timeout_s,
         )
 
+        self._transfers = TransferManager(
+            lambda: self._http,
+            f"{self.cfg.api_base}\0{self.cfg.api_key or ''}",
+            self.cfg.transfer_cache_dir,
+            self.cfg.download_concurrency,
+        )
+
     def close(self) -> None:
         self._http.close()
 
@@ -182,7 +191,11 @@ class Client:
         # Metadata, completion, and inline uploads share the same request budget as parts.
         with self._upload_slots:
             check_cancelled(cancel)
-            return self._request(method, path, **kwargs)
+
+            def action() -> httpx.Response:
+                return self._request(method, path, **kwargs)
+
+            return retry_request(action, cancel) if method in {"GET", "PUT"} else action()
 
     # --- public resources -------------------------------------------------
 
@@ -349,22 +362,54 @@ class Client:
         expected: dict[str, Any],
         upload_id: str | None,
     ) -> dict[str, Any]:
-        if upload_id is None:
-            return self._upload_request(
-                "POST",
-                "/v1/artifact-uploads",
-                operation="Artifact upload session creation",
-                json=expected,
-            ).json()
-        session = self._upload_request(
-            "GET",
-            f"/v1/artifact-uploads/{upload_id}",
-            operation="Artifact upload session lookup",
-        ).json()
-        for field, value in expected.items():
-            if session.get(field) != value:
-                raise GfaasError(f"Artifact upload session {upload_id} does not match {field}")
-        return session
+        key = "upload:" + json.dumps(expected, sort_keys=True, separators=(",", ":"))
+        with self._transfers.workspace(key) as directory:
+            receipt = directory / "session.json"
+            automatic = upload_id is None
+            if automatic and receipt.exists():
+                upload_id = json.loads(receipt.read_bytes())["id"]
+            session = None
+            if upload_id is not None:
+                try:
+                    session = self._upload_request(
+                        "GET",
+                        f"/v1/artifact-uploads/{upload_id}",
+                        operation="Artifact upload session lookup",
+                    ).json()
+                except GfaasError as error:
+                    if not automatic or error.status_code not in {404, 410}:
+                        raise
+                if session is not None:
+                    for field, value in expected.items():
+                        if session.get(field) != value:
+                            raise GfaasError(
+                                f"Artifact upload session {upload_id} does not match {field}"
+                            )
+            if automatic and session is not None and session.get("artifact_id"):
+                try:
+                    published = self.get_artifact(session["artifact_id"])
+                except GfaasError as error:
+                    if error.status_code not in {404, 410}:
+                        raise
+                    session = None
+                else:
+                    if _artifact_expired(published):
+                        session = None
+            if session is None:
+                session = self._upload_request(
+                    "POST",
+                    "/v1/artifact-uploads",
+                    operation="Artifact upload session creation",
+                    json=expected,
+                ).json()
+                temporary = receipt.with_suffix(".new")
+                with temporary.open("w") as output:
+                    json.dump({"id": session["id"]}, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.replace(receipt)
+            session["_recovery_key"] = key
+            return session
 
     def _upload_artifact_parts(
         self,
@@ -374,9 +419,34 @@ class Client:
         progress: Callable[[int, int, int, ArtifactUploadPhase], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
+        result = self._transfer_artifact_parts(session, read_part, size_bytes, progress, cancel)
+        if key := session.get("_recovery_key"):
+            with self._transfers.workspace(key) as directory:
+                self._transfers.finish(directory)
+        return result
+
+    def _transfer_artifact_parts(
+        self,
+        session: dict[str, Any],
+        read_part: Callable[[int, int], bytes],
+        size_bytes: int,
+        progress: Callable[[int, int, int, ArtifactUploadPhase], None] | None = None,
+        cancel: Event | None = None,
+    ) -> dict[str, Any]:
         session_id = str(session["id"])
         part_size = _upload_part_size(session)
-        uploaded = {int(part["part_number"]): part for part in session.get("parts", [])}
+        uploaded: dict[int, dict[str, Any]] = {}
+        for part in session.get("parts", []):
+            number = int(part["part_number"])
+            if (
+                number < 0
+                or number >= (size_bytes + part_size - 1) // part_size
+                or number in uploaded
+            ):
+                raise GfaasError(
+                    "Artifact upload session contains invalid or duplicate part numbers"
+                )
+            uploaded[number] = part
         completed_bytes = transferred_bytes = reused_bytes = 0
         stopped = Event()
         transfer_errors: list[BaseException] = []
@@ -395,16 +465,46 @@ class Client:
                     chunk_digest = _content_digest(chunk)
                     existing = uploaded.get(part_number)
                     if existing is None:
-                        self._request(
-                            "PUT",
-                            f"/v1/artifact-uploads/{session_id}/parts/{part_number}",
-                            operation="Artifact upload part transfer",
-                            content=chunk,
-                            headers={
-                                "Content-Type": "application/octet-stream",
-                                "Content-Digest": chunk_digest,
-                            },
-                        )
+
+                        def send_part() -> httpx.Response:
+                            check_cancelled(stopped)
+                            try:
+                                return self._request(
+                                    "PUT",
+                                    f"/v1/artifact-uploads/{session_id}/parts/{part_number}",
+                                    operation="Artifact upload part transfer",
+                                    content=chunk,
+                                    headers={
+                                        "Content-Type": "application/octet-stream",
+                                        "Content-Digest": chunk_digest,
+                                    },
+                                )
+                            except (GfaasError, *TRANSIENT_ERRORS) as error:
+                                if (
+                                    isinstance(error, GfaasError)
+                                    and error.status_code not in RETRYABLE_STATUS
+                                ):
+                                    raise
+                                # A lost response does not mean the PUT was rejected. Check its receipt
+                                # before sending this part again. This lookup uses the held request slot.
+                                status = self._request(
+                                    "GET",
+                                    f"/v1/artifact-uploads/{session_id}",
+                                    operation="Artifact part reconciliation",
+                                )
+                                for part in status.json().get("parts", []):
+                                    if part.get("part_number") == part_number:
+                                        if (
+                                            part.get("size_bytes") != len(chunk)
+                                            or part.get("digest") != chunk_digest
+                                        ):
+                                            raise GfaasError(
+                                                "Artifact upload receipt conflicts with local bytes"
+                                            ) from error
+                                        return status
+                                raise
+
+                        retry_request(send_part, cancel)
                     elif (
                         int(existing.get("size_bytes", -1)) != len(chunk)
                         or existing.get("digest") != chunk_digest
@@ -551,6 +651,32 @@ class Client:
         progress: Callable[[ArtifactUploadProgress], None] | None = None,
         cancel: Event | None = None,
     ) -> dict[str, Any]:
+        """Upload a directory, retaining completed children if publication fails."""
+        key = "tree-upload:" + json.dumps([str(Path(path).resolve()), kind, filename, ttl_seconds])
+        with self._transfers.workspace(key) as receipts:
+            result = self._upload_artifact_directory(
+                path,
+                kind=kind,
+                filename=filename,
+                ttl_seconds=ttl_seconds,
+                progress=progress,
+                cancel=cancel,
+                receipts=receipts,
+            )
+            self._transfers.finish(receipts)
+            return result
+
+    def _upload_artifact_directory(
+        self,
+        path: Path | str,
+        *,
+        kind: str = "input",
+        filename: str | None = None,
+        ttl_seconds: int | None = None,
+        progress: Callable[[ArtifactUploadProgress], None] | None = None,
+        cancel: Event | None = None,
+        receipts: Path,
+    ) -> dict[str, Any]:
         """Upload a directory as one immutable tree Artifact."""
         retention = _artifact_retention(ttl_seconds)
         source = Path(path)
@@ -630,6 +756,32 @@ class Client:
                             )
                         )
 
+            receipt = receipts / (hashlib.sha256(relative.encode()).hexdigest() + ".json")
+            size, digest = _file_identity(child)
+            if receipt.exists():
+                saved = json.loads(receipt.read_bytes())
+                if saved["size"] == size and saved["digest"] == digest:
+                    try:
+                        artifact = self.get_artifact(saved["artifact"]["id"])
+                    except GfaasError as error:
+                        if error.status_code not in {404, 410}:
+                            raise
+                    else:
+                        if not _artifact_expired(artifact):
+                            report_file(
+                                ArtifactUploadProgress(
+                                    path=child,
+                                    completed_bytes=size,
+                                    total_bytes=size,
+                                    transferred_bytes=0,
+                                    reused_bytes=size,
+                                    completed_files=1,
+                                    phase="published",
+                                    artifact_id=artifact["id"],
+                                )
+                            )
+                            return relative, artifact
+
             try:
                 artifact = self.upload_artifact_file(
                     child,
@@ -639,6 +791,12 @@ class Client:
                     progress=report_file if progress is not None else None,
                     cancel=cancel,
                 )
+                temporary = receipt.with_suffix(".new")
+                with temporary.open("w") as output:
+                    json.dump({"size": size, "digest": digest, "artifact": artifact}, output)
+                    output.flush()
+                    os.fsync(output.fileno())
+                temporary.replace(receipt)
                 return relative, artifact
             except Exception as error:
                 stopped.set()
@@ -827,12 +985,9 @@ class Client:
                 return
 
     def download_artifact(self, artifact_id: str) -> tuple[bytes, str]:
-        response = self._request(
-            "GET",
-            f"/v1/artifacts/{artifact_id}/content",
-            operation="artifact download",
-        )
-        return response.content, response.headers.get("Content-Type", "application/octet-stream")
+        with tempfile.TemporaryDirectory(prefix="vfunc-download-") as directory:
+            path, media = self.download_artifact_file(artifact_id, Path(directory) / "body")
+            return path.read_bytes(), media
 
     def download_artifact_file(
         self,
@@ -840,37 +995,7 @@ class Client:
         destination: Path | str,
     ) -> tuple[Path, str]:
         """Download an Artifact to a new file without buffering it in memory."""
-        target = Path(destination)
-        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
-        hasher = hashlib.sha256()
-        written = 0
-        try:
-            with self._http.stream(
-                "GET",
-                f"/v1/artifacts/{artifact_id}/content",
-            ) as response:
-                if not response.is_success:
-                    detail = _response_detail(response)
-                    suffix = f": {detail}" if detail else ""
-                    raise GfaasError(f"Artifact download failed: {response.status_code}{suffix}")
-                expected_size = int(response.headers["Content-Length"])
-                expected_digest = response.headers["Content-Digest"]
-                media_type = response.headers.get("Content-Type", "application/octet-stream")
-                with temporary.open("xb") as output:
-                    for chunk in response.iter_bytes(chunk_size=64 * 1024):
-                        if written + len(chunk) > expected_size:
-                            raise GfaasError("Artifact download exceeds its declared size")
-                        output.write(chunk)
-                        hasher.update(chunk)
-                        written += len(chunk)
-                    output.flush()
-                if written != expected_size or _format_digest(hasher.digest()) != expected_digest:
-                    raise GfaasError("Artifact download failed integrity verification")
-            temporary.replace(target)
-            return target, media_type
-        except Exception:
-            temporary.unlink(missing_ok=True)
-            raise
+        return self._transfers.file(artifact_id, Path(destination))
 
     def download_artifact_directory(
         self,
@@ -887,10 +1012,9 @@ class Client:
         target = Path(destination)
         if target.exists() or target.is_symlink():
             raise FileExistsError(f"Artifact tree destination already exists: {target}")
-        temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
-        manifest_path = temporary / ".gfaas-tree-manifest.json"
-        temporary.mkdir()
-        try:
+        with self._transfers.workspace(f"tree:{artifact_id}") as workspace:
+            manifest_path = workspace / "manifest.json"
+            manifest_path.unlink(missing_ok=True)
             _, media_type = self.download_artifact_file(artifact_id, manifest_path)
             if media_type != TREE_ARTIFACT_MEDIA_TYPE:
                 raise GfaasError("Artifact tree download returned the wrong media type")
@@ -898,27 +1022,53 @@ class Client:
                 manifest = json.loads(manifest_path.read_bytes())
             except (json.JSONDecodeError, UnicodeDecodeError) as error:
                 raise GfaasError("Artifact tree manifest is invalid JSON") from error
-            manifest_path.unlink()
             entries = _validated_tree_entries(manifest)
-            directories = [temporary]
+            contents = workspace / "contents"
+            contents.mkdir(exist_ok=True, mode=0o700)
+            files = []
             for entry in entries:
-                path = temporary.joinpath(*Path(entry["path"]).parts)
+                path = contents.joinpath(*Path(entry["path"]).parts)
+                if path.is_symlink():
+                    raise GfaasError("Artifact tree cache contains a symbolic link")
                 if entry["type"] == "directory":
-                    path.mkdir()
-                    directories.append(path)
-                    continue
+                    path.mkdir(exist_ok=True)
+                else:
+                    files.append(entry)
+
+            def receive(entry: dict[str, Any]) -> None:
+                path = contents.joinpath(*Path(entry["path"]).parts)
+                if path.exists():
+                    size, digest = _file_identity(path)
+                    if size == entry["size_bytes"] and digest == entry["digest"]:
+                        return
+                    path.unlink()
                 self.download_artifact_file(str(entry["artifact_id"]), path)
-                size_bytes, digest = _file_identity(path)
-                if size_bytes != entry["size_bytes"] or digest != entry["digest"]:
+                size, digest = _file_identity(path)
+                if size != entry["size_bytes"] or digest != entry["digest"]:
+                    path.unlink()
                     raise GfaasError("Artifact tree entry failed manifest verification")
-                path.chmod(int(entry["mode"]))
-            for directory in reversed(directories):
-                directory.chmod(0o555)
-            temporary.replace(target)
+
+            run_uploads(files, receive, lambda _: None, self.cfg.download_concurrency)
+            temporary = target.with_name(f".{target.name}.{uuid.uuid4().hex}.part")
+            try:
+                shutil.copytree(contents, temporary)
+                for entry in entries:
+                    path = temporary.joinpath(*Path(entry["path"]).parts)
+                    if entry["type"] == "file":
+                        path.chmod(int(entry["mode"]))
+                for entry in reversed(entries):
+                    if entry["type"] == "directory":
+                        temporary.joinpath(*Path(entry["path"]).parts).chmod(0o555)
+                temporary.chmod(0o555)
+                if target.exists() or target.is_symlink():
+                    raise FileExistsError(target)
+                temporary.rename(target)
+            except BaseException:
+                if temporary.exists():
+                    _remove_tree(temporary)
+                raise
+            self._transfers.finish(workspace)
             return target
-        except Exception:
-            _remove_tree(temporary)
-            raise
 
     def delete_artifact(self, artifact_id: str) -> None:
         self._request(
@@ -1311,6 +1461,14 @@ class Client:
             if deadline is not None and time.monotonic() >= deadline:
                 raise TimeoutError(f"call {call_id} not finished within {timeout_s}s")
             time.sleep(self.cfg.poll_interval_s)
+
+
+def _artifact_expired(artifact: dict[str, Any]) -> bool:
+    expiry = artifact.get("expires_at")
+    return (
+        expiry is not None
+        and datetime.fromisoformat(str(expiry)).timestamp() <= datetime.now(UTC).timestamp()
+    )
 
 
 def _upload_part_size(session: dict[str, Any]) -> int:
