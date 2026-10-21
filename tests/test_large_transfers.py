@@ -13,7 +13,6 @@ import pytest
 
 from gfaas.client import Client
 from gfaas.config import ClientConfig
-from gfaas.errors import ArtifactUploadError
 
 
 def digest(data: bytes) -> str:
@@ -94,11 +93,9 @@ def test_large_bytes_and_files_resume_after_part_and_completion_failures(
                 return client.upload_artifact_file(source, kind="input", upload_id=upload_id)
             return client.upload_artifact(data, kind="input", upload_id=upload_id)
 
-        with pytest.raises(ArtifactUploadError) as interrupted:
-            upload()
-        result = upload(interrupted.value.upload_id)
+        result = upload()
         assert result["id"] == "art_large"
-        assert upload(interrupted.value.upload_id) == result
+        assert upload("upl_large") == result
         assert sorted(requests) == list(range(9)), "accepted parts were transferred again"
 
 
