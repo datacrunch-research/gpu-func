@@ -160,13 +160,18 @@ class Client:
         response = self._http.request(method, path, **kwargs)
         if response.is_success:
             return response
-        if response.status_code in {401, 403}:
+        problem = _problem_body(response)
+        policy_denied = (
+            response.status_code == 403
+            and problem is not None
+            and problem.get("code") == "execution_policy_denied"
+        )
+        if response.status_code in {401, 403} and not policy_denied:
             raise GfaasError(
                 f"{operation} failed: authentication rejected by "
                 f"{self.cfg.api_base} ({response.status_code})"
             )
 
-        problem = _problem_body(response)
         if problem is not None and problem.get("code") == "unsupported_gpu_pool":
             compatibility = problem.get("compatibility")
             if isinstance(compatibility, dict):
@@ -1112,12 +1117,25 @@ class Client:
             operation=f"{resource_kind} retirement",
         ).json()
 
+    def _check_environment_isolation(self, isolation: object) -> None:
+        if isolation is None:
+            return
+        if isolation not in ("host_kernel", "isolated_kernel"):
+            raise GfaasError("isolation must be host_kernel or isolated_kernel")
+        capability = self.get_capabilities().get("environment_isolation")
+        if not isinstance(capability, dict) or capability.get("protocol_version") != 1:
+            raise GfaasError("service cannot enforce explicit Environment isolation requirements")
+        if isolation not in capability.get("offered", []):
+            raise GfaasError(f"service does not offer {isolation} isolation")
+        # The server checks current permission and can replay an existing idempotency key.
+
     def create_environment(
         self,
         definition: dict[str, Any],
         *,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
+        self._check_environment_isolation(definition.get("isolation"))
         return self._post_resource(
             "/v1/environments", definition, "environment creation", idempotency_key
         )
@@ -1251,6 +1269,7 @@ class Client:
         *,
         image: Image | str,
         compatibility: Compatibility | None = None,
+        isolation: str | None = None,
         function: tuple[str, str] | Any,
         args: tuple[Any, ...] = (),
         kwargs: dict[str, Any] | None = None,
@@ -1341,12 +1360,6 @@ class Client:
             qualname = function.__name__
             filename = file.name
 
-        source = self.upload_artifact(
-            bundle.data,
-            kind="source",
-            media_type="application/gzip",
-            filename=filename,
-        )
         environment_source: dict[str, Any] = {
             "kind": "registered_image",
             "name": qualification_image_digest or image_name,
@@ -1362,7 +1375,15 @@ class Client:
         }
         if requirements:
             environment_definition["compatibility"] = requirements
+        if isolation is not None:
+            environment_definition["isolation"] = isolation
         environment = self.create_environment(environment_definition)
+        source = self.upload_artifact(
+            bundle.data,
+            kind="source",
+            media_type="application/gzip",
+            filename=filename,
+        )
         resources = {
             "gpu": gpu_request,
             "timeout_seconds": timeout_s,
