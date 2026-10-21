@@ -9,6 +9,11 @@ from gfaas import Compatibility
 
 def add_compatibility_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
+        "--isolation",
+        choices=("container", "sandbox"),
+        help="require Environment execution isolation; does not reserve a dedicated GPU or host",
+    )
+    parser.add_argument(
         "--cpu-architecture",
         choices=("amd64", "arm64"),
         help="require this worker CPU architecture; the image must also match",

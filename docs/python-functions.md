@@ -63,10 +63,39 @@ Large serialized arguments use multipart uploads. Results download to a verified
 before decoding. The decoded object must still fit in client memory. Use `ArtifactRef` for large
 files that the remote function can read directly.
 
+## Execution isolation
+
+A function can request an Environment isolation property:
+
+```python
+@app.function(isolation="container")
+def calculate():
+    return 1 + 1
+```
+
+`container` uses Linux namespaces and the host kernel. `sandbox` requires a separate userspace
+kernel. The current service supports only `container`. It rejects `sandbox` instead of silently
+using a container. Neither value promises GPU hardware isolation or a dedicated machine.
+
+When the option is omitted, the service uses your principal's default. Administrators control
+allowed values and defaults. All API keys for one principal share these permissions. The SDK checks
+service support before it submits an explicit requirement. The coordinator checks permission. Older
+services without that capability cannot accept explicit requests.
+
+The Environment keeps its resolved policy after an administrator changes the default. Every Call
+stage inherits that policy. New Calls and queued dispatch still require current permission.
+Revocation does not cancel accepted work. Matching workers must enforce the policy, even when other
+workers are idle. The normal capacity deadline bounds the wait.
+
+`Client.submit(isolation=...)` uses the same option. For raw API calls, include `isolation` in the
+`create_environment()` definition. Environment and Call details expose the resolved `execution`
+object, with `policy_id` and `isolation`. Do not put isolation fields in Call or stage definitions.
+
 ## Decorator options
 
 | Option                    | Meaning                                                                                               |
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `isolation`               | Optional `"container"` or `"sandbox"` requirement. Omission uses the principal default.               |
 | `compatibility`           | CPU architecture and exact GPU compute capabilities. See [hardware requirements](images/hardware.md). |
 | `image`                   | Image for this function. The `App` image is the default.                                              |
 | `gpu_count`               | Number of GPUs that one worker must lease. Use 0 for a CPU-only Call.                                 |

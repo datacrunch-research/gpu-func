@@ -267,6 +267,7 @@ def _submission_options(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "gpu_count": args.gpu_count,
         "compatibility": args.compatibility,
+        "isolation": getattr(args, "isolation", None),
         "gpu_type": gpu_type,
         "timeout_s": args.timeout,
         "capacity_wait_s": args.capacity_wait,

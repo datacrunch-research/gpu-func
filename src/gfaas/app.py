@@ -101,6 +101,7 @@ class Function:
     env: dict[str, str] = field(default_factory=dict)
     outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = ()
     compatibility: Compatibility | None = None
+    isolation: str | None = None
 
     def __post_init__(self) -> None:
         self.name = self.handler.__name__
@@ -137,6 +138,7 @@ class Function:
         return self.app.client.submit(
             image=self._resolve_image(),
             compatibility=self.compatibility,
+            isolation=self.isolation,
             function=self.handler,
             args=args,
             kwargs=kwargs,
@@ -188,6 +190,7 @@ class App:
         *,
         image: Image | None | _Unset = _UNSET,
         compatibility: Compatibility | None | _Unset = _UNSET,
+        isolation: str | None | _Unset = _UNSET,
         gpu: str | None | _Unset = _UNSET,
         gpu_count: int | None | _Unset = _UNSET,
         gpu_type: str | _Unset = _UNSET,
@@ -206,6 +209,7 @@ class App:
         options: dict[str, Any] = {
             "image": None,
             "compatibility": None,
+            "isolation": None,
             "gpu": None,
             "gpu_count": None,
             "gpu_type": "any",
