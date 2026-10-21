@@ -50,6 +50,21 @@ except gfaas.CudaError as error:
 Do not retry every `GfaasError` automatically. Authentication, invalid input, and policy errors need
 a configuration or code change.
 
+## Execution isolation errors
+
+A `sandbox` request currently fails as unsupported. The SDK also rejects explicit isolation
+requirements when the service cannot advertise enforcement support. Removing the requirement changes
+the requested boundary. It is not an automatic retry strategy.
+
+`execution_policy_denied` means that your principal cannot use the Environment's resolved policy. An
+administrator must restore permission, or you must use an Environment with a permitted policy. A new
+default does not change existing Environments.
+
+Waiting Calls can report `execution_unknown` or `execution_mismatch` in their `compatibility`
+details. These states mean that matching hardware lacks reported enforcement support or has an
+incompatible policy. More time does not change that policy. Ask the operator to inspect worker
+versions and configuration. The capacity deadline still bounds the wait.
+
 ## GPU requests
 
 | Request            | Meaning                                  |

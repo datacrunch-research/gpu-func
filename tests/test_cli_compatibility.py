@@ -37,10 +37,15 @@ def test_cli_submissions_send_hardware_requirements(command, tmp_path, monkeypat
             return httpx.Response(
                 200,
                 json={
+                    "environment_isolation": {
+                        "protocol_version": 1,
+                        "supported": ["container"],
+                        "allowed": ["container"],
+                    },
                     "environment_compatibility": {
                         "cpu_architectures": ["amd64", "arm64"],
                         "gpu_compute_capabilities": "exact",
-                    }
+                    },
                 },
             )
         if path == "artifacts":
@@ -75,6 +80,8 @@ def test_cli_submissions_send_hardware_requirements(command, tmp_path, monkeypat
             main(
                 commands[command]
                 + [
+                    "--isolation",
+                    "container",
                     "--detach",
                     "--gpu-type",
                     "gb300",
@@ -89,6 +96,7 @@ def test_cli_submissions_send_hardware_requirements(command, tmp_path, monkeypat
             )
             == 0
         )
+    assert bodies["environments"]["isolation"] == "container"
     assert bodies["environments"]["compatibility"] == {
         "cpu_architecture": "arm64",
         "gpu_compute_capabilities": ["10.0", "10.3"],

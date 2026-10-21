@@ -22,7 +22,12 @@ change one field, use `dataclasses.replace()` on that configuration. See
 [installation](../install.md#configure-the-client) for environment variable names.
 
 `get_capabilities()` returns the service's advertised capability dictionary. The SDK checks relevant
-capabilities before submitting explicit hardware requirements or native image variants.
+capabilities before submitting explicit isolation requirements, hardware requirements, or native
+image variants.
+
+The `environment_isolation` capability reports `protocol_version`, `supported`, `allowed`, and
+`default`. An explicit request must be supported by the service and permitted for your principal.
+See [execution isolation](../python-functions.md#execution-isolation) for the current limits.
 
 ## Submit a function
 
@@ -37,6 +42,7 @@ capabilities before submitting explicit hardware requirements or native image va
 | `app_name`                                       | `"gfaas"`      | Function resource name                                                               |
 | `gpu_count`, `gpu`                               | `None`, `None` | Explicit count or older selector; mutually exclusive                                 |
 | `gpu_type`                                       | `"any"`        | Pool restriction; does not request a GPU by itself                                   |
+| `isolation`                                      | `None`         | Environment isolation requirement: `"container"` or `"sandbox"`                      |
 | `compatibility`                                  | `None`         | CPU architecture and GPU capability requirements                                     |
 | `timeout_s`                                      | `300`          | Active execution timeout                                                             |
 | `capacity_wait_s`                                | `None`         | Optional placement/preparation deadline                                              |

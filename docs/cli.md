@@ -306,6 +306,23 @@ The CLI prints the serialized return value after the Call completes.
 
 Use a Python SDK program when the callable needs typed arguments or keyword arguments.
 
+## Require execution isolation
+
+Remote submission commands accept `--isolation container` or `--isolation sandbox`. These include
+`run`, `custom`, `exercise`, and the top-level exercise shortcuts.
+
+```bash
+vfunc run experiment.py --image research --isolation container
+```
+
+Omitting this option uses the principal's default for the Environment. The current service supports
+only `container` and rejects `sandbox`. The SDK also rejects explicit requirements against an older
+service that cannot enforce them. The option does not select a runtime executable or reserve a
+machine.
+
+See [execution isolation](python-functions.md#execution-isolation) for permissions, retained
+policies, and limits.
+
 ## Require compatible hardware
 
 Remote submission commands accept `--cpu-architecture` and repeatable `--gpu-compute-capability`
