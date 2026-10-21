@@ -50,6 +50,24 @@ except gfaas.CudaError as error:
 Do not retry every `GfaasError` automatically. Authentication, invalid input, and policy errors need
 a configuration or code change.
 
+## Execution isolation errors
+
+`unsupported_isolation` means that the deployment does not offer the requested mode. An
+`isolated_kernel` request currently fails this way. The SDK reports the same condition before it
+uploads anything, and also rejects explicit requirements when the service does not advertise
+enforcement support. Removing the requirement changes the requested boundary. It is not an automatic
+retry strategy.
+
+`execution_policy_denied` means that your principal has no grant for `host_kernel` and the
+deployment's default is another mode. An administrator must grant it, or you must use an Environment
+with the default mode. A new default does not change existing Environments, so an Environment
+created with `host_kernel` needs the grant after the default changes.
+
+A waiting Call can report `execution_mismatch` in its `compatibility` details. This state means that
+workers with matching hardware enforce a different mode than the Environment requires. More time
+does not change that. Ask the operator to inspect worker configuration. The capacity deadline still
+bounds the wait.
+
 ## GPU requests
 
 | Request            | Meaning                                  |

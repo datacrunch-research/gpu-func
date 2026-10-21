@@ -63,10 +63,42 @@ Large serialized arguments use multipart uploads. Results download to a verified
 before decoding. The decoded object must still fit in client memory. Use `ArtifactRef` for large
 files that the remote function can read directly.
 
+## Execution isolation
+
+A function can name the kernel that must handle its system calls:
+
+```python
+@app.function(isolation="host_kernel")
+def calculate():
+    return 1 + 1
+```
+
+`host_kernel` shares the host's Linux kernel through Linux namespaces. `isolated_kernel` requires a
+kernel that the workload does not share with the host. The current service offers only
+`host_kernel`. It rejects `isolated_kernel` instead of silently using the host kernel. Neither value
+promises GPU hardware isolation or a dedicated machine.
+
+When the option is omitted, the service uses the deployment's default, which is `host_kernel` today.
+The direction is that `isolated_kernel` becomes the default once workers can run it. From then on,
+`host_kernel` needs a grant that an administrator gives to your principal, and you must still
+request it explicitly. All API keys for one principal share the grant. The SDK checks that the
+service offers a mode before it submits an explicit requirement. The coordinator checks permission.
+Older services without that capability cannot accept explicit requests.
+
+The Environment keeps its resolved policy after an administrator changes the default. Every Call
+stage inherits that policy. New Calls and queued dispatch still require current permission.
+Revocation does not cancel accepted work. A worker runs only work that requires the mode it
+enforces, even when other workers are idle. The normal capacity deadline bounds the wait.
+
+`Client.submit(isolation=...)` uses the same option. For raw API calls, include `isolation` in the
+`create_environment()` definition. Environment and Call details expose the resolved `execution`
+object, with `policy_id` and `isolation`. Do not put isolation fields in Call or stage definitions.
+
 ## Decorator options
 
 | Option                    | Meaning                                                                                               |
 | ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `isolation`               | Optional `"host_kernel"` or `"isolated_kernel"` requirement. Omission uses the deployment default.    |
 | `compatibility`           | CPU architecture and exact GPU compute capabilities. See [hardware requirements](images/hardware.md). |
 | `image`                   | Image for this function. The `App` image is the default.                                              |
 | `gpu_count`               | Number of GPUs that one worker must lease. Use 0 for a CPU-only Call.                                 |

@@ -306,6 +306,23 @@ The CLI prints the serialized return value after the Call completes.
 
 Use a Python SDK program when the callable needs typed arguments or keyword arguments.
 
+## Require execution isolation
+
+Remote submission commands accept `--isolation host_kernel` or `--isolation isolated_kernel`. These
+include `run`, `custom`, `exercise`, and the top-level exercise shortcuts.
+
+```bash
+vfunc run experiment.py --image research --isolation host_kernel
+```
+
+Omitting this option uses the deployment's default for the Environment. The current service offers
+only `host_kernel` and rejects `isolated_kernel`. The SDK also rejects explicit requirements against
+an older service that cannot enforce them. The option does not select a runtime executable or
+reserve a machine.
+
+See [execution isolation](python-functions.md#execution-isolation) for permissions, retained
+policies, and limits.
+
 ## Require compatible hardware
 
 Remote submission commands accept `--cpu-architecture` and repeatable `--gpu-compute-capability`

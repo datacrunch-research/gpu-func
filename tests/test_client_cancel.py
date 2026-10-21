@@ -60,14 +60,14 @@ def test_remote_result_cancel_uses_call_cancellation_endpoint():
 @pytest.mark.parametrize("status_code", [401, 403])
 def test_high_level_submit_reports_authentication_rejection_without_leaking_key(status_code: int):
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/api/v1/artifacts"
+        assert request.url.path == "/api/v1/environments"
         return httpx.Response(status_code, json={"detail": "invalid API key key-1"})
 
     with _client(handler) as client, pytest.raises(GfaasError) as captured:
         client.submit(image="image", function=("module", "function"))
 
     assert str(captured.value) == (
-        "artifact upload failed: authentication rejected by "
+        "environment creation failed: authentication rejected by "
         f"https://gpu.example.com/api ({status_code})"
     )
     assert "key-1" not in str(captured.value)
