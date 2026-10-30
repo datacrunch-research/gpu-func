@@ -23,8 +23,9 @@ submissions.
 
 ## Additional software
 
-The SDK does not build images during submission. `Image.from_container(...)` constructs a build
-specification, but `Client.submit()` rejects it because dynamic builds are not enabled on this path.
+The SDK does not build images during submission. Describe the software with
+`Image.from_container(...)` and publish it with `vfunc image publish` first. See
+[build an image from a container specification](build.md).
 
-Ask an operator or publisher to provide an image with the required software. Then use its registered
-name or digest. For mixed ARM and x86 workers, supply [native image variants](hardware.md).
+Otherwise, ask an operator or publisher to provide an image with the required software. Then use its
+registered name or digest. For mixed ARM and x86 workers, supply [native image variants](hardware.md).

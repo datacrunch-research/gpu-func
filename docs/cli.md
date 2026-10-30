@@ -19,6 +19,7 @@ The command groups have these purposes:
 | `vfunc call`       | Inspect, watch, or cancel a durable Call.       |
 | `vfunc artifact`   | Download an Artifact or change its retention.   |
 | `vfunc pool`       | List the configured GPU pools.                  |
+| `vfunc image`      | Build a file's container image on the service.  |
 | `vfunc completion` | Generate shell-completion setup.                |
 | `vfunc custom`     | Compile, run, or profile a custom CUDA program. |
 | `vfunc exercise`   | Run an action for a CUDA course exercise.       |
@@ -294,7 +295,8 @@ The `.py` suffix selects the Python script runner. The runner invokes the script
 output and passes the arguments after `--`.
 
 The selected image must contain all imported third-party packages. The CLI does not import or run
-the script on the client.
+the script on the client. Without `--image`, it uses the `Image.from_container(...)` that the file
+assigns at module level, if any. See [build an image](images/build.md) to publish that image.
 
 The script starts with the output directory as its current directory. Declare files and directories
 that the Call must publish:
@@ -323,6 +325,21 @@ The callable must be at module scope. Each value after `--` becomes one string p
 The CLI prints the serialized return value after the Call completes.
 
 Use a Python SDK program when the callable needs typed arguments or keyword arguments.
+
+## Build a container image
+
+Publish the `Image.from_container(...)` that a file assigns, then run the file with it:
+
+```bash
+vfunc image publish experiment.py:image
+vfunc run experiment.py:train -- input.json
+```
+
+The deployment's image build service builds the image and publishes it for your API key's principal
+as `NAME-xxxxxx`: the image's `name` (default `img`) and a hash of its build fields. `publish` follows
+the build log until the image is ready and then prints its name. `--no-wait` returns after the
+service accepts the build. `vfunc image status experiment.py:image` shows the current state, and
+`vfunc image list` lists your principal's builds. See [build an image](images/build.md).
 
 ## Require compatible hardware
 

@@ -53,6 +53,7 @@ def client_config_from_args(args: argparse.Namespace) -> ClientConfig:
         api_key=defaults.api_key,
         upload_concurrency=defaults.upload_concurrency,
         upload_completion_timeout_s=defaults.upload_completion_timeout_s,
+        image_builds_url=defaults.image_builds_url,
         poll_interval_s=(
             args.poll_interval if args.poll_interval is not None else defaults.poll_interval_s
         ),

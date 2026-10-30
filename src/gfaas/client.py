@@ -44,7 +44,7 @@ from .errors import (
     UnsupportedGpuPoolError,
 )
 from .events import TERMINAL_CALL_STATES, EventWatcher
-from .image import Image
+from .image import Image, build_spec_suffix
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
 from .transfers import RETRYABLE_STATUS, TRANSIENT_ERRORS, TransferManager, retry_request
@@ -163,7 +163,8 @@ class Client:
         if response.status_code in {401, 403}:
             raise GfaasError(
                 f"{operation} failed: authentication rejected by "
-                f"{self.cfg.api_base} ({response.status_code})"
+                f"{self.cfg.api_base} ({response.status_code})",
+                status_code=response.status_code,
             )
 
         problem = _problem_body(response)
@@ -196,6 +197,84 @@ class Client:
                 return self._request(method, path, **kwargs)
 
             return retry_request(action, cancel) if method in {"GET", "PUT"} else action()
+
+    # --- image builds -------------------------------------------------------
+
+    def request_image_build(
+        self, image: Image, *, architecture: str | None = None
+    ) -> dict[str, Any]:
+        """Ask the image build service to build and publish a container specification.
+
+        The service publishes the image as ``image.name`` for this API key's principal. Submitting
+        the same specification again returns the existing build, or retries a failed one. Without
+        ``architecture``, the service builds for its own CPU architecture.
+        """
+        if image.build_spec is None:
+            raise GfaasError(f"image {image.name!r} has no container build specification")
+        if not image.name.endswith(f"-{build_spec_suffix(image.build_spec)}"):
+            raise GfaasError(
+                f"image name {image.name!r} does not end with its specification's hash; "
+                "create the image with Image.from_container()"
+            )
+        body: dict[str, Any] = {"spec": image.build_spec, "name": image.name}
+        if architecture is not None:
+            body["architecture"] = architecture
+        build = self._image_build_request(
+            "POST", "/builds", operation="image build request", json=body
+        )
+        if build.get("name") != image.name:
+            raise GfaasError(
+                f"the image build service named the image {build.get('name')!r}, not {image.name!r}"
+            )
+        return build
+
+    def list_image_builds(self) -> list[dict[str, Any]]:
+        """Return this principal's container image builds, most recently updated first."""
+        items = self._image_build_request("GET", "/builds", operation="image build listing").get(
+            "items"
+        )
+        if not isinstance(items, list):
+            raise GfaasError("image build listing returned an invalid response")
+        return items
+
+    def get_image_build(self, name: str) -> dict[str, Any]:
+        """Return the state of this principal's build of a container image name."""
+        return self._image_build_request(
+            "GET", f"/builds/{_container_image_name(name)}", operation="image build lookup"
+        )
+
+    def read_image_build_log(self, name: str, *, offset: int = 0) -> dict[str, Any]:
+        """Return build log text from ``offset``, the next offset, and the build state."""
+        return self._image_build_request(
+            "GET",
+            f"/builds/{_container_image_name(name)}/log",
+            operation="image build log read",
+            params={"offset": offset},
+        )
+
+    def _image_build_request(
+        self, method: str, path: str, *, operation: str, **kwargs: Any
+    ) -> dict[str, Any]:
+        base = self.cfg.image_builds_url or f"{self.cfg.api_base}/v1/image-builds"
+        try:
+            response = self._request(
+                method, f"{base.rstrip('/')}{path}", operation=operation, **kwargs
+            )
+        except GfaasError as error:
+            reason = {
+                401: "rejected the API key",
+                403: "does not publish images for this API key's principal",
+            }.get(error.status_code or 0)
+            if reason is None:
+                raise
+            raise GfaasError(
+                f"{operation} failed: the image build service at {base} {reason}",
+                status_code=error.status_code,
+            ) from error
+        body = response.json()
+        if not isinstance(body, dict):
+            raise GfaasError(f"{operation} returned an invalid response")
+        return body
 
     # --- public resources -------------------------------------------------
 
@@ -1275,11 +1354,6 @@ class Client:
     ) -> RemoteResult:
         """Package a Python callable and create an asynchronous Call."""
         image_name = _image_name(image)
-        if _image_spec(image) is not None:
-            raise GfaasError(
-                "container build images are not enabled by the current gfaas service; "
-                "use a registered image"
-            )
         if qualification_image_digest is not None and not re.fullmatch(
             r"sha256:[0-9a-f]{64}", qualification_image_digest
         ):
@@ -1362,7 +1436,16 @@ class Client:
         }
         if requirements:
             environment_definition["compatibility"] = requirements
-        environment = self.create_environment(environment_definition)
+        try:
+            environment = self.create_environment(environment_definition)
+        except GfaasError as error:
+            if error.status_code != 404 or _image_spec(image) is None:
+                raise
+            raise GfaasError(
+                f"image {image_name!r} is not published for this API key's principal; build it "
+                "with `vfunc image publish FILE.py:VARIABLE` or Client.request_image_build()",
+                status_code=404,
+            ) from error
         resources = {
             "gpu": gpu_request,
             "timeout_seconds": timeout_s,
@@ -1690,6 +1773,12 @@ def _image_name(image: Image | str) -> str:
     if isinstance(image, Image):
         return image.name
     raise GfaasError(f"unsupported image reference: {image!r}")
+
+
+def _container_image_name(name: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}-[a-z2-7]{6}", name) is None:
+        raise GfaasError(f"image build names have the form NAME-xxxxxx, not {name!r}")
+    return name
 
 
 def _image_spec(image: Image | str) -> dict[str, Any] | None:

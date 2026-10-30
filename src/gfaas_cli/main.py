@@ -14,7 +14,7 @@ import httpx
 from gfaas import Client
 from gfaas.errors import GfaasError
 
-from . import auth, general
+from . import auth, general, images
 from .client import GfaasClient, sdk_client_from_args
 from .commands import _cmd_custom, _cmd_exercise, _cmd_exercise_mode, _cmd_workers
 from .compatibility import compatibility_from_args
@@ -65,6 +65,14 @@ def _main(
 
     if args.command_name in auth.AUTH_COMMANDS:
         return auth.dispatch(args)
+
+    if args.command_name in images.IMAGE_COMMANDS:
+        factory = client_factory or (lambda: sdk_client_from_args(args))
+        try:
+            with factory() as client:
+                return images.dispatch(args, client)
+        except CliError as exc:
+            raise CliError(str(exc), exit_code=1) from exc
 
     if args.command_name in general.GENERAL_COMMANDS:
         factory = client_factory or (lambda: sdk_client_from_args(args))

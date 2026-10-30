@@ -539,12 +539,3 @@ def test_wait_bounds_a_large_failure_journey():
     assert "item=0" in message
     assert "item=44" in message
     assert "item=20" not in message
-
-
-def test_dynamic_image_builds_fail_before_network_access():
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise AssertionError(f"unexpected request: {request.method} {request.url}")
-
-    image = Image.from_container("python:3.11")
-    with _client(handler) as client, pytest.raises(GfaasError, match="registered image"):
-        client.submit(image=image, function=("module", "function"))

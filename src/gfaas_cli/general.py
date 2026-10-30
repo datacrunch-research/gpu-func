@@ -18,11 +18,12 @@ from typing import Any
 import argcomplete
 from argcomplete.completers import FilesCompleter
 
-from gfaas import cuda_runner, local_cuda, python_runner
+from gfaas import Image, cuda_runner, local_cuda, python_runner
 from gfaas.artifacts import ArtifactOutput
 from gfaas.client import Client, RemoteResult
 from gfaas.cuda import staged_execution_plan
 
+from . import images
 from .compatibility import add_compatibility_options
 from .errors import CliError
 from .events import show_event
@@ -108,7 +109,9 @@ def add_commands(commands: Any) -> None:
     target = run.add_argument("target", help="a .py file, file.py:callable, or .cu file")
     target.completer = FilesCompleter(("py", "cu"))
     run.add_argument("--runtime", choices=("python", "cuda"))
-    run.add_argument("--image", help="registered image name")
+    run.add_argument(
+        "--image", help="registered image name (default: the file's Image.from_container)"
+    )
     run.add_argument("--gpu-type", help="GPU pool name; defaults to GFAAS_GPU_TYPE or any")
     run.add_argument("--gpu-count", type=_positive_integer, default=1)
     add_compatibility_options(run)
@@ -308,7 +311,7 @@ def _submit_run(
 
     if args.profile or args.nvcc_flag or args.ncu_arg:
         raise CliError("CUDA compiler and profiler options require a CUDA source file")
-    image = args.image or os.environ.get("GFAAS_IMAGE") or "pytorch-cu130"
+    image = args.image or _declared_image(path, json_output=args.json)
     if callable_name is not None:
         remote = client.submit(
             image=image,
@@ -332,6 +335,23 @@ def _submit_run(
         **options,
     )
     return remote, runtime
+
+
+def _declared_image(path: Path, *, json_output: bool) -> Image | str:
+    """The file's own container image, else GFAAS_IMAGE, else the default registered image.
+
+    A file that the local Python cannot parse can still be valid for the remote interpreter.
+    """
+    try:
+        declared = images.declared_image(path)
+    except images.UnparsableSourceError:
+        declared = None
+    if declared is None:
+        return os.environ.get("GFAAS_IMAGE") or "pytorch-cu130"
+    variable, image = declared
+    if not json_output:
+        print(f"[vfunc] image={image.name} from {path.name}:{variable}", file=sys.stderr)
+    return image
 
 
 def _json_value(value: Any) -> Any:

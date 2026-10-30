@@ -20,6 +20,7 @@ Workers fetch missing filesystem objects into a local cache. The SDK does not re
 credentials. Cache placement and storage configuration belong to the operator.
 
 - [Select a registered image](prepared.md).
+- [Build an image from a container specification](build.md).
 - [Use an immutable image reference](remote.md).
 - [Select native images and hardware](hardware.md).
 - [Check and share a published image](qualification.md).

@@ -23,6 +23,8 @@ class ClientConfig:
     upload_completion_timeout_s: float = 600
     transfer_cache_dir: Path | None = None
     download_concurrency: int = 4
+    # The image build service; None selects {api_base}/v1/image-builds. It receives the API key.
+    image_builds_url: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.download_concurrency) is not int or not 1 <= self.download_concurrency <= 16:
@@ -64,4 +66,5 @@ class ClientConfig:
             download_concurrency=int(env.get("GFAAS_DOWNLOAD_CONCURRENCY", "4")),
             upload_concurrency=int(env.get("GFAAS_UPLOAD_CONCURRENCY", "4")),
             upload_completion_timeout_s=float(env.get("GFAAS_UPLOAD_COMPLETION_TIMEOUT", "600")),
+            image_builds_url=env.get("GFAAS_IMAGE_BUILDS_URL") or None,
         )

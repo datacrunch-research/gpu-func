@@ -8,6 +8,7 @@
   - [CUDA development workflows](cuda-workflows.md)
 - [Images](images/index.md)
   - [Select a registered image](images/prepared.md)
+  - [Build an image from a container specification](images/build.md)
   - [Use an immutable image reference](images/remote.md)
   - [Hardware requirements and native images](images/hardware.md)
   - [Check and share a published image](images/qualification.md)

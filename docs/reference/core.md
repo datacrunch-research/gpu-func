@@ -28,16 +28,17 @@ A decorated `Function` provides:
 
 ## Image
 
-| Constructor                                  | Meaning                                                                            |
-| -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `Image(name)` or `Image.from_registry(name)` | Select a registered name or immutable digest                                       |
-| `Image.from_registry_variants(name, images)` | Map `amd64` and/or `arm64` to registered references                                |
-| `Image.from_remote(name, descriptor)`        | Select an existing registration through its exact descriptor                       |
-| `Image.from_container(base_image, ...)`      | Construct a build specification; submission rejects it on the current service path |
+| Constructor                                  | Meaning                                                         |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| `Image(name)` or `Image.from_registry(name)` | Select a registered name or immutable digest                    |
+| `Image.from_registry_variants(name, images)` | Map `amd64` and/or `arm64` to registered references             |
+| `Image.from_remote(name, descriptor)`        | Select an existing registration through its exact descriptor    |
+| `Image.from_container(base_image, ...)`      | Describe a build; select it by its `NAME-xxxxxx` published name |
 
 `from_container` accepts `python_version="3.11"`, `apt_packages=()`, `pip_packages=()`, `env=None`,
-`commands=()`, and `name=None`. These describe a specification; they do not perform an image build.
-See [images](../images/index.md) for the supported publication and selection boundary.
+`commands=()`, and `name=None`. The published name is `name` (default `img`) followed by a hash of
+the other fields. Submission does not build the image. Publish it first with `vfunc image publish`
+or `Client.request_image_build(image)`. See [build an image](../images/build.md).
 
 ## Compatibility
 

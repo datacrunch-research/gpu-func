@@ -6,7 +6,7 @@ import argparse
 import os
 import re
 
-from . import auth, general
+from . import auth, general, images
 from .compatibility import add_compatibility_options
 
 # The exercise actions, usable both as `exercise <id> <mode>` and as a
@@ -149,6 +149,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     general.add_commands(sub)
     auth.add_commands(sub)
+    images.add_commands(sub)
 
     sub.add_parser("workers", aliases=["pools"], help="List configured gfaas GPU pools")
 
