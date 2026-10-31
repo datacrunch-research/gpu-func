@@ -86,11 +86,30 @@ the `vfunc image publish` command.
 | `apt_packages`   | Installs Debian or Ubuntu packages.                                                   |
 | `pip_packages`   | Installs packages into the Python that workers run, adding Python 3 if it is missing. |
 | `python_version` | With `pip_packages`, fails the build unless that Python has this version.             |
-| `env`            | Sets image environment variables.                                                     |
+| `env`            | Sets variables for the build steps below it. They do not reach the running container. |
 | `commands`       | Runs each shell command in order.                                                     |
 
 Functions need `cloudpickle` in the image, so list it in `pip_packages` when the base image lacks
 it. Do not put secrets in `env` or `commands`: they become part of the image.
+
+An image is a filesystem, so `env` configures the build and nothing else. A function that needs a
+variable sets it itself, before importing the package that reads it. Everything outside the
+workspace is read-only at run time, so a package that caches on import needs a writable path:
+
+```python
+@app.function(gpu_count=1)
+def version() -> str:
+    import os
+
+    os.environ["HOME"] = "/tmp"
+    os.environ["XDG_CACHE_HOME"] = "/tmp/.cache"
+
+    import flashinfer
+
+    return flashinfer.__version__
+```
+
+Without this, such a package fails at run time with `Read-only file system: '/root/.cache'`.
 
 The service builds images for its own CPU architecture. Its operator decides which principals it
 serves; a request from another principal fails with HTTP 403.
