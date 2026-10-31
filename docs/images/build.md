@@ -49,6 +49,21 @@ assigned to literals earlier in the module.
 Publishing the same specification again returns the existing build. A failed build is retried.
 `vfunc image list` shows your principal's builds, newest first, with their state and digest.
 
+## Watch builds on the dashboard
+
+The build service also has a dashboard of every build, with its specification and the end of its
+log. It has no authentication, so it listens only on the build host. Forward it to your machine
+over SSH, then open it:
+
+```bash
+ssh -N -L 8091:127.0.0.1:8091 BUILD_HOST &
+vfunc image-dashboard
+```
+
+Ask your operator for `BUILD_HOST`. The command checks that the dashboard answers and opens
+`http://127.0.0.1:8091/` in your browser. Over SSH without a display, or with `--no-browser`, it
+prints the address instead. Set `GFAAS_IMAGE_DASHBOARD_URL` or pass `--url` for another address.
+
 ## Run with the image
 
 After publication, the SDK selects the image by its name:

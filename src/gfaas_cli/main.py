@@ -66,6 +66,9 @@ def _main(
     if args.command_name in auth.AUTH_COMMANDS:
         return auth.dispatch(args)
 
+    if args.command_name == images.DASHBOARD_COMMAND:
+        return images.open_dashboard(args)
+
     if args.command_name in images.IMAGE_COMMANDS:
         factory = client_factory or (lambda: sdk_client_from_args(args))
         try:

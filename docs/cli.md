@@ -339,7 +339,8 @@ The deployment's image build service builds the image and publishes it for your 
 as `NAME-xxxxxx`: the image's `name` (default `img`) and a hash of its build fields. `publish` follows
 the build log until the image is ready and then prints its name. `--no-wait` returns after the
 service accepts the build. `vfunc image status experiment.py:image` shows the current state, and
-`vfunc image list` lists your principal's builds. See [build an image](images/build.md).
+`vfunc image list` lists your principal's builds. `vfunc image-dashboard` opens the service's
+dashboard; see [build an image](images/build.md).
 
 ## Require compatible hardware
 

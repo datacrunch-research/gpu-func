@@ -440,3 +440,72 @@ def test_run_uses_the_files_declared_image(
         assert cli.main(["run", target, "--detach", *arguments], client_factory=lambda: client) == 0
 
     assert [submission["image"] for submission in client.submissions] == [expected, expected]
+
+
+def no_client() -> Client:
+    raise AssertionError("the dashboard command must not need an API client")
+
+
+@pytest.fixture
+def dashboard(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[str]]:
+    calls: dict[str, list[str]] = {"get": [], "open": []}
+
+    def get(url: str, **_: Any) -> httpx.Response:
+        calls["get"].append(url)
+        return httpx.Response(200, text="<h1>Image builds</h1>")
+
+    def open_url(url: str) -> bool:
+        calls["open"].append(url)
+        return True
+
+    monkeypatch.setattr(images.httpx, "get", get)
+    monkeypatch.setattr(images.webbrowser, "open", open_url)
+    monkeypatch.delenv("GFAAS_IMAGE_DASHBOARD_URL", raising=False)
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    monkeypatch.delenv("SSH_TTY", raising=False)
+    return calls
+
+
+def test_image_dashboard_opens_the_forwarded_dashboard(
+    dashboard: dict[str, list[str]], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert cli.main(["image-dashboard"], client_factory=no_client) == 0
+
+    assert dashboard == {
+        "get": [images.DEFAULT_DASHBOARD_URL],
+        "open": [images.DEFAULT_DASHBOARD_URL],
+    }
+    assert capsys.readouterr().out == f"Opened {images.DEFAULT_DASHBOARD_URL}\n"
+
+
+def test_image_dashboard_prints_the_address_without_a_browser(
+    dashboard: dict[str, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GFAAS_IMAGE_DASHBOARD_URL", "http://127.0.0.1:9091/")
+
+    assert cli.main(["image-dashboard", "--no-browser"], client_factory=no_client) == 0
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    assert cli.main(["image-dashboard"], client_factory=no_client) == 0
+
+    assert dashboard["open"] == []
+    assert capsys.readouterr().out == "http://127.0.0.1:9091/\n" * 2
+
+
+def test_image_dashboard_explains_a_missing_forward(
+    dashboard: dict[str, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def refuse(url: str, **_: Any) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(images.httpx, "get", refuse)
+
+    assert cli.main(["image-dashboard"], client_factory=no_client) == 1
+
+    assert dashboard["open"] == []
+    assert "ssh -N -L 8091:127.0.0.1:8091 BUILD_HOST" in capsys.readouterr().err

@@ -13,19 +13,26 @@ import argparse
 import ast
 import contextlib
 import json
+import os
 import sys
 import time
+import webbrowser
 from pathlib import Path
 from typing import Any
 
+import httpx
 from argcomplete.completers import FilesCompleter
 
 from gfaas import Image
 from gfaas.client import Client
 
+from . import auth
 from .errors import CliError
 
 IMAGE_COMMANDS = frozenset({"image", "images"})
+DASHBOARD_COMMAND = "image-dashboard"
+# The build service's dashboard listens on its host's loopback; operators forward it to this port.
+DEFAULT_DASHBOARD_URL = "http://127.0.0.1:8091/"
 _TERMINAL_STATES = {"ready", "failed"}
 
 
@@ -54,6 +61,17 @@ def add_commands(commands: Any) -> None:
     status.add_argument("--json", action="store_true", help="write the build as JSON")
     listing = image_commands.add_parser("list", help="list your principal's image builds")
     listing.add_argument("--json", action="store_true", help="write the builds as JSON")
+    dashboard = commands.add_parser(
+        DASHBOARD_COMMAND, help="open the image build service's dashboard in a browser"
+    )
+    dashboard.add_argument(
+        "--url",
+        default=os.environ.get("GFAAS_IMAGE_DASHBOARD_URL", DEFAULT_DASHBOARD_URL),
+        help=f"dashboard address (default: $GFAAS_IMAGE_DASHBOARD_URL or {DEFAULT_DASHBOARD_URL})",
+    )
+    dashboard.add_argument(
+        "--no-browser", action="store_true", help="print the address instead of opening it"
+    )
 
 
 class UnparsableSourceError(CliError):
@@ -256,6 +274,26 @@ def _list(client: Client, args: argparse.Namespace) -> int:
             f"{str(build.get('name', '')):<{width}}  {str(build.get('state', '')):<10}  "
             f"{when:<19}  {str(build.get('digest') or '')[:19]}"
         )
+    return 0
+
+
+def open_dashboard(args: argparse.Namespace) -> int:
+    """Open the dashboard after checking that something answers at its address."""
+    url = args.url
+    try:
+        httpx.get(url, timeout=3.0)
+    except httpx.HTTPError as error:
+        port = httpx.URL(url).port or 80
+        raise CliError(
+            f"nothing answers at {url} ({error.__class__.__name__}). The dashboard listens only "
+            f"on the build host; forward it first, for example:\n"
+            f"  ssh -N -L {port}:127.0.0.1:8091 BUILD_HOST",
+            exit_code=1,
+        ) from error
+    if args.no_browser or not auth._browser_available(os.environ) or not webbrowser.open(url):
+        print(url)
+        return 0
+    print(f"Opened {url}")
     return 0
 
 
