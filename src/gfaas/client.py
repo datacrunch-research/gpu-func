@@ -1682,14 +1682,16 @@ def _gpu_request(
             explicit_request["models"] = [gpu_type]
         return explicit_request
     if gpu is None:
-        return {"count": 0}
-    selector = gpu.strip()
-    if not selector:
-        raise GfaasError("GPU selector must not be empty")
-    if selector.lower() == "all":
-        raise GfaasError("gpu='all' is ambiguous; request an explicit GPU count")
-    tokens = [token.strip() for token in selector.split(",")]
-    count = len(tokens) if all(token.isdigit() for token in tokens) else 1
+        # A CPU-only Call is placed in a pool too, so it keeps the pool it names.
+        count = 0
+    else:
+        selector = gpu.strip()
+        if not selector:
+            raise GfaasError("GPU selector must not be empty")
+        if selector.lower() == "all":
+            raise GfaasError("gpu='all' is ambiguous; request an explicit GPU count")
+        tokens = [token.strip() for token in selector.split(",")]
+        count = len(tokens) if all(token.isdigit() for token in tokens) else 1
     request: dict[str, Any] = {"count": count}
     if gpu_type != "any":
         request["models"] = [gpu_type]
