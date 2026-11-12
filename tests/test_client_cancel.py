@@ -17,6 +17,7 @@ from gfaas.client import (
     Client,
     GfaasError,
     RemoteResult,
+    _gpu_request,
 )
 from gfaas.config import ClientConfig
 from gfaas.errors import UnsupportedGpuPoolError
@@ -97,6 +98,22 @@ def test_submit_rejects_invalid_explicit_gpu_counts_before_network_access(
             gpu=gpu,
             gpu_count=gpu_count,
         )
+
+
+@pytest.mark.parametrize(
+    ("gpu", "gpu_count", "gpu_type", "request_body"),
+    [
+        (None, None, "any", {"count": 0}),
+        # A CPU-only Call keeps the pool it names, with or without an explicit count of zero.
+        (None, None, "gb300", {"count": 0, "models": ["gb300"]}),
+        (None, 0, "gb300", {"count": 0, "models": ["gb300"]}),
+        (None, 2, "gb300", {"count": 2, "models": ["gb300"]}),
+        ("any", None, "gb300", {"count": 1, "models": ["gb300"]}),
+        ("0,1", None, "any", {"count": 2}),
+    ],
+)
+def test_gpu_request_names_the_pool_for_every_count(gpu, gpu_count, gpu_type, request_body):
+    assert _gpu_request(gpu, gpu_count, gpu_type) == request_body
 
 
 @pytest.mark.parametrize(
