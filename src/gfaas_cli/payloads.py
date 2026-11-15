@@ -10,6 +10,9 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from gfaas.errors import GfaasError
+from gfaas.profiling import ProfilingRequest
+
 from .constants import (
     _CHECKOUT_SKIP_DIRS,
     GPU_DEFAULTS,
@@ -361,6 +364,26 @@ def _build_custom_payload(args: argparse.Namespace, gpu_type: str, arch: str) ->
     if arch:
         flags.append(f"-arch={arch}")
 
+    profiling = None
+    if args.custom_command == "profile":
+        arguments = shlex.split(args.ncu_args) if args.ncu_args else []
+        if not args.no_nvtx_filter and args.nvtx_range:
+            suffix = "" if args.nvtx_range.endswith("/") else "/"
+            arguments += ["--nvtx", "--nvtx-include", args.nvtx_range + suffix]
+        budgets = {
+            "timeout_s": args.profile_timeout,
+            "launch_count": args.profile_launch_count,
+            "max_report_bytes": args.profile_max_report,
+        }
+        try:
+            profiling = ProfilingRequest.from_arguments(
+                arguments,
+                default_set="basic",
+                **{name: value for name, value in budgets.items() if value is not None},
+            ).to_dict()
+        except GfaasError as error:
+            raise CliError(str(error)) from error
+
     return {
         "schema_version": 1,
         "target": {
@@ -384,8 +407,7 @@ def _build_custom_payload(args: argparse.Namespace, gpu_type: str, arch: str) ->
             "output": args.output,
             "report_name": report_name,
             "program_args": list(args.arg),
-            "ncu_args": shlex.split(args.ncu_args) if args.ncu_args else ["--set", "basic"],
-            "nvtx_range": "" if args.no_nvtx_filter else args.nvtx_range,
+            "profiling": profiling,
             "timeout_s": args.timeout,
         },
         "files": files,

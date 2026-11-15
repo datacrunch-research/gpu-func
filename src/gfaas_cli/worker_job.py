@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from gfaas import ArtifactOutput, ArtifactRef, scratch_path
+from gfaas.profiling import DEFAULT_MAX_REPORT_BYTES, ProfilingRequest, run_profiler
 
 PROFILE_OUTPUT = ArtifactOutput.directory(
     "profiles",
@@ -231,30 +232,57 @@ def _run_compiled_custom_job(
 ) -> dict[str, Any]:
     custom = job["custom"]
     program = ["./" + custom["output"], *custom.get("program_args", [])]
+    if custom["command"] != "profile":
+        run_result = _run_process(program, workdir, _remaining(deadline))
+        status = "passed"
+        if run_result["timed_out"]:
+            status = "timeout"
+        elif run_result["returncode"] != 0:
+            status = "error"
+        return _custom_result(status, compile_result, run_result, [], file_hashes)
+
     export_base = Path(custom.get("report_name") or "custom_profile").name
-    if custom["command"] == "profile":
-        run_args = [_which("ncu"), *custom.get("ncu_args", ["--set", "basic"])]
-        nvtx_range = custom.get("nvtx_range", "")
-        if nvtx_range:
-            suffix = "/" if not nvtx_range.endswith("/") else ""
-            run_args += ["--nvtx", "--nvtx-include", nvtx_range + suffix]
-        run_args += ["--force-overwrite", "--export", export_base, *program]
-    else:
-        run_args = program
-
-    run_result = _run_process(run_args, workdir, _remaining(deadline))
-    profiles: list[dict[str, str]] = []
-    if custom["command"] == "profile":
-        report = workdir / f"{export_base}.ncu-rep"
-        if report.is_file():
-            profiles.append(_publish_profile(report, profile_output))
-
-    status = "passed"
-    if run_result["timed_out"]:
-        status = "timeout"
-    elif run_result["returncode"] != 0:
+    started = time.monotonic()
+    profiled = run_profiler(
+        program,
+        ProfilingRequest.from_dict(custom["profiling"]),
+        ncu=_find("ncu"),
+        cwd=workdir,
+        env=_subprocess_env(workdir),
+        report_directory=workdir,
+        report_name=export_base,
+        publish_directory=profile_output.path,
+        output_name=profile_output.name,
+        remaining_s=_remaining(deadline),
+        provenance={
+            "compiler_arguments": compile_result.get("args"),
+            "image": job.get("remote", {}).get("image"),
+        },
+    )
+    process, outcome = profiled["process"], profiled["outcome"]
+    # A profiler deadline is the profiler's result. Only the program's own failure is the run's.
+    run_result = _process_result(
+        program,
+        outcome["program_returncode"],
+        process["stdout"],
+        process["stderr"],
+        started,
+        timed_out=False,
+    )
+    profiles = [
+        {"filename": report["filename"], "output_name": report["output_name"]}
+        for report in outcome["reports"]
+        if report.get("output_name")
+    ]
+    if outcome["program_returncode"] not in (None, 0):
         status = "error"
-    return _custom_result(status, compile_result, run_result, profiles, file_hashes)
+    elif outcome["status"] == "profiled":
+        status = "passed"
+    else:
+        status = "profile_failed"
+    result = _custom_result(status, compile_result, run_result, profiles, file_hashes)
+    result["profiling"] = outcome
+    return result
 
 
 def _custom_compile_identity(job: dict[str, Any], file_hashes: dict[str, str]) -> str:
@@ -275,7 +303,7 @@ def _custom_result(
     status: str,
     compile_result: dict[str, Any],
     run_result: dict[str, Any] | None,
-    profiles: list[dict[str, str]],
+    profiles: list[dict[str, Any]],
     file_hashes: dict[str, str],
     *,
     error: str | None = None,
@@ -319,7 +347,7 @@ def _run_course_runner(
         except (json.JSONDecodeError, UnicodeDecodeError):
             report_json = None
 
-    profiles: list[dict[str, str]] = []
+    profiles: list[dict[str, Any]] = []
     seen: set[Path] = set()
     for pattern in spec.get("artifact_globs", []):
         if pattern == json_name:
@@ -347,13 +375,26 @@ def _run_course_runner(
     }
 
 
-def _publish_profile(path: Path, output: ArtifactOutput) -> dict[str, str]:
+def _publish_profile(path: Path, output: ArtifactOutput) -> dict[str, Any]:
+    """Publish a report the course runner wrote, with its size and digest, within the limit."""
+    size = path.stat().st_size
+    if size > DEFAULT_MAX_REPORT_BYTES:
+        return {
+            "filename": path.name,
+            "size_bytes": size,
+            "skipped": f"larger than the {DEFAULT_MAX_REPORT_BYTES} byte report limit",
+        }
     output.path.mkdir(parents=True, exist_ok=True)
     destination = output.path / path.name
     if destination.exists():
         raise FileExistsError(f"duplicate profile report name: {path.name}")
     shutil.copyfile(path, destination)
-    return {"filename": path.name, "output_name": output.name}
+    return {
+        "filename": path.name,
+        "output_name": output.name,
+        "size_bytes": size,
+        "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+    }
 
 
 def _verify_workspace(root: Path, expected: Any) -> dict[str, str]:
@@ -472,6 +513,13 @@ def _which(command: str) -> str:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
     raise RuntimeError(f"required binary not found in PATH: {command}")
+
+
+def _find(command: str) -> str | None:
+    try:
+        return _which(command)
+    except RuntimeError:
+        return None
 
 
 def _host_cxx_flags() -> list[str]:

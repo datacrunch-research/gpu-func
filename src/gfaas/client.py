@@ -45,6 +45,7 @@ from .errors import (
 )
 from .events import TERMINAL_CALL_STATES, EventWatcher
 from .image import Image
+from .profiling import ProfilingNotGrantedError, ProfilingUnsupportedError
 from .serialization import CLOUDPICKLE_CODEC, PICKLE_CODEC, decode_result_file, encode_args
 from .stages import CallStage
 from .transfers import RETRYABLE_STATUS, TRANSIENT_ERRORS, TransferManager, retry_request
@@ -166,6 +167,16 @@ class Client:
             and problem is not None
             and problem.get("code") == "execution_policy_denied"
         )
+        if (
+            response.status_code == 403
+            and problem is not None
+            and problem.get("code") == "profiling_not_granted"
+        ):
+            # The grant can be withdrawn between the capability check and the request.
+            raise ProfilingNotGrantedError(
+                "this API key has no profiling grant; ask your operator for one",
+                status_code=403,
+            )
         if response.status_code in {401, 403} and not policy_denied:
             raise GfaasError(
                 f"{operation} failed: authentication rejected by "
@@ -1117,6 +1128,21 @@ class Client:
             operation=f"{resource_kind} retirement",
         ).json()
 
+    def _check_profiling(self, capability: object) -> None:
+        """Refuse a profiling request the service would refuse, before any upload."""
+        if capability is None:
+            return
+        offered = self.get_capabilities().get("profiling")
+        if not isinstance(offered, dict) or capability not in offered.get("capabilities", []):
+            raise ProfilingUnsupportedError(
+                f"service does not offer the {capability!r} profiling capability"
+            )
+        if offered.get("granted") is not True:
+            raise ProfilingNotGrantedError(
+                "this API key has no profiling grant; ask your operator for one",
+                status_code=403,
+            )
+
     def _check_environment_isolation(self, isolation: object) -> None:
         if isolation is None:
             return
@@ -1291,8 +1317,17 @@ class Client:
         qualification_image_digest: str | None = None,
         outputs: tuple[ArtifactOutput | ArtifactCheckpoint, ...] = (),
         stages: tuple[CallStage, ...] = (),
+        profiling: str | None = None,
     ) -> RemoteResult:
-        """Package a Python callable and create an asynchronous Call."""
+        """Package a Python callable and create an asynchronous Call.
+
+        ``profiling`` names a profiling capability the workload needs, such as ``"gpu_counters"``
+        to read GPU performance counters with Nsight Compute, Nsight Systems or CUPTI. The service
+        then runs the Call's GPU stages only on hosts that allow it. The API key needs the
+        ``profiling`` grant: without it this method raises :class:`ProfilingNotGrantedError`
+        before it uploads anything.
+        """
+        self._check_profiling(profiling)
         image_name = _image_name(image)
         if _image_spec(image) is not None:
             raise GfaasError(
@@ -1423,6 +1458,8 @@ class Client:
             call_request["outputs"] = [output.request() for output in outputs]
         if stages:
             call_request["stages"] = [stage.request(default_module=module_name) for stage in stages]
+        if profiling is not None:
+            call_request["profiling"] = {"capability": profiling}
         artifact_ids = collect_artifact_ids(args, kwargs)
         if artifact_ids:
             call_request["artifacts"] = [

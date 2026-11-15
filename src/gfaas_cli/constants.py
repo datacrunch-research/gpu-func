@@ -21,6 +21,8 @@ RC_CRASH = 2
 RC_WRONG = 3
 RC_TIMEOUT = 4
 RC_SETUP = 5
+# The program ran, but the profiler produced no profile.
+RC_PROFILE = 6
 
 _CHECKOUT_SKIP_DIRS = {
     "__pycache__",

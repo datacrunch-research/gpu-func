@@ -575,10 +575,38 @@ vfunc custom run vecadd.cu \
 
 The coordinator uses this key to identify a repeated Call request.
 
+### Profiling needs a grant
+
+A profile job reads GPU performance counters. `vfunc custom profile` and the course `profile`
+command ask the service for that access, and the service runs the job only on a host that allows it.
+Your API key needs the `profiling` grant. Without it the command stops before it uploads your
+workspace and tells you to ask your operator.
+
+### Profile outcomes
+
+A profile job can run your program correctly and still capture nothing. `vfunc custom profile`
+reports the profiler's result apart from the program's and exits with status 6 when the program ran
+but no profile was produced:
+
+| Outcome                | Meaning                                                           |
+| ---------------------- | ----------------------------------------------------------------- |
+| `no_kernels`           | No kernel launch was captured. Check the NVTX range name first.   |
+| `permission_denied`    | The host's driver refused access to the GPU counters.             |
+| `profiler_failed`      | Nsight Compute failed, for example on an invalid `--ncu-args`.    |
+| `profiler_timed_out`   | The profiled run exceeded `--profile-timeout` (default 300 s).    |
+| `profiler_unavailable` | The image has no `ncu`.                                           |
+| `report_too_large`     | The report exceeded `--profile-max-report` and was not published. |
+
+`--profile-launch-count N` limits the profile to the first `N` kernel launches, which bounds the
+replay time of a program that launches many kernels. The `--json FILE` result carries the full
+outcome in `profiling`, including each report's size and SHA-256 digest and the profiler, driver and
+GPU that produced it.
+
 ### Profile Artifacts
 
 Nsight reports do not travel inside result JSON. They can be large, and they must remain useful
-after the local process ends.
+after the local process ends. Each report is published with a `.csv` export and a `.provenance.json`
+record of the outcome that produced it.
 
 The worker publishes reports through a declared `profiles` output Artifact. Use `--artifact-dir` to
 download them immediately:
@@ -870,6 +898,7 @@ The course and custom workflow commands use these exit codes:
 | `3`   | A correctness test reported a wrong answer.                    |
 | `4`   | The workflow exceeded a time limit.                            |
 | `5`   | Setup, API access, remote execution, or report parsing failed. |
+| `6`   | The program ran, but the profiler produced no profile.         |
 | `130` | The user interrupted the command.                              |
 
 A course runner controls its detailed exit result. A custom harness must return a nonzero exit code
@@ -877,6 +906,7 @@ for an incorrect numerical result.
 
 The `run` and `local run` commands return the program status when the program stops with an error.
 They limit a positive program status to `125`. They return `1` for a negative status or a CLI error.
+With `--profile`, they return `6` when the program ran but the profiler produced no profile.
 
 The Call, Artifact, pool, and completion commands return `0` after success. They return `1` after a
 client or service error.

@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .constants import RC_COMPILE, RC_CRASH, RC_OK, RC_SETUP, RC_TIMEOUT
+from .constants import RC_COMPILE, RC_CRASH, RC_OK, RC_PROFILE, RC_SETUP, RC_TIMEOUT
 
 
 def _print_setup_error(result: dict[str, Any]) -> None:
@@ -97,9 +97,26 @@ def _print_custom_result(
     for path in downloaded_profiles or []:
         print(f"vfunc: profile report -> {path}", file=sys.stderr)
 
+    profiling = result.get("profiling")
+    if isinstance(profiling, dict):
+        for warning in profiling.get("warnings", []):
+            print(f"vfunc: profiler warning: {warning}", file=sys.stderr)
+        for report in profiling.get("reports", []):
+            print(
+                f"vfunc: profile report {report.get('filename')} "
+                f"bytes={report.get('size_bytes')} sha256={report.get('sha256')}",
+                file=sys.stderr,
+            )
     if result.get("status") == "passed":
         print(f"Custom {args.custom_command} passed")
         return RC_OK
+    if result.get("status") == "profile_failed" and isinstance(profiling, dict):
+        # The program ran; the profiler is what produced nothing.
+        print(
+            f"vfunc: profiling ended as {profiling.get('status')}: {profiling.get('detail')}",
+            file=sys.stderr,
+        )
+        return RC_PROFILE
     if result.get("status") == "compile_failed":
         return RC_COMPILE
     _print_setup_error(result)

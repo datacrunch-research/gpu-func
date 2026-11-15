@@ -21,6 +21,7 @@ from gfaas import (
     call_status_summary,
 )
 from gfaas.errors import GfaasError
+from gfaas.profiling import GPU_COUNTERS
 
 from .errors import CliError
 from .events import show_event
@@ -172,6 +173,8 @@ class GfaasClient:
                 idempotency_key=args.idempotency_key,
                 outputs=outputs,
                 stages=stages,
+                # A profiled job reads GPU counters, so it asks for a host that allows it.
+                profiling=GPU_COUNTERS if mode in {"profile", "custom-profile"} else None,
             )
         except (GfaasError, OSError, ValueError) as exc:
             raise CliError(str(exc)) from exc

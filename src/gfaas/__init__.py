@@ -27,6 +27,14 @@ from .errors import (
 )
 from .image import Image
 from .kernel import Kernel, KernelBenchmark, benchmark
+from .profiling import (
+    ProfilingError,
+    ProfilingNotGrantedError,
+    ProfilingOutcome,
+    ProfilingReport,
+    ProfilingRequest,
+    ProfilingUnsupportedError,
+)
 from .progress import call_status_summary
 from .stages import CallStage, StageArtifactBinding
 from .thunderkittens_kernel import (
@@ -74,6 +82,12 @@ __all__ = [
     "ArtifactUploadProgress",
     "Client",
     "call_status_summary",
+    "ProfilingError",
+    "ProfilingNotGrantedError",
+    "ProfilingOutcome",
+    "ProfilingReport",
+    "ProfilingRequest",
+    "ProfilingUnsupportedError",
     "ClientConfig",
     "Compatibility",
     "CallStage",

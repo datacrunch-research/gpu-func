@@ -13,7 +13,10 @@ also exported by `gfaas`.
 | `ArtifactTreeUploadError`        | Directory operation failed; `child_artifact_ids`, `upload_ids`, `failures`                                                       |
 | `CudaError`                      | Base class for CUDA helper report errors; `report`, `phase`, `stdout`, `stderr`, `returncode`, `compile_ms`, `run_ms`, `ncu_csv` |
 | `CudaCompilationError`           | Compile failure represented by a CUDA report; staged compile failures normally fail the Call instead                             |
-| `CudaProcessError`               | Program or profiler failed in a CUDA helper report                                                                               |
+| `CudaProcessError`               | Program failed in a CUDA helper report                                                                                           |
+| `ProfilingNotGrantedError`       | The API key has no `profiling` grant; raised before submission                                                                   |
+| `ProfilingUnsupportedError`      | The service does not offer the requested profiling capability                                                                    |
+| `ProfilingError`                 | A profiled run produced no profile; `outcome`                                                                                    |
 | `TritonCompilationError`         | Compiler variants failed; `report`, `call_id`, `call_ids`                                                                        |
 | `TritonQuickBenchmarkError`      | Early benchmark failed; `report`, `call_id`, `call_ids`                                                                          |
 | `TritonBenchmarkError`           | Replicated benchmark failed; `report`, `call_ids`                                                                                |

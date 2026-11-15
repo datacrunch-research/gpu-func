@@ -236,17 +236,32 @@ uv run vfunc run kernel.cu \
   --nvcc-flag=-arch=sm_103
 ```
 
-Add `--profile` to collect an Nsight Compute CSV report. With no profiler arguments, the command
-uses `--set full`.
-
-To replace the default, repeat `--ncu-arg` for each profiler argument:
+Add `--profile` to run the program under Nsight Compute. Your API key needs the `profiling` grant
+from your operator; without it the command stops before it submits anything.
 
 ```bash
 uv run vfunc run kernel.cu \
+  --gpu-type gb300 \
   --profile \
-  --ncu-arg=--set \
-  --ncu-arg=basic
+  --profile-set basic \
+  --profile-dir ./profiles
 ```
+
+| Option                   | Meaning                                                |
+| ------------------------ | ------------------------------------------------------ |
+| `--profile-set`          | `basic` or `full` (default `full`)                     |
+| `--ncu-arg`              | One more Nsight Compute option; repeat for each        |
+| `--profile-timeout`      | Seconds for the profiled run alone (default 300)       |
+| `--profile-launch-count` | Profile at most this many kernel launches              |
+| `--profile-max-report`   | Largest report to publish or download (default 64 MiB) |
+| `--profile-baseline`     | Also run without the profiler and report the slowdown  |
+| `--profile-dir`          | Download the reports into this directory               |
+
+The command prints the program's output, then one `profiling=` status line, each profiler warning,
+and each report's size, SHA-256 digest and Artifact. The statuses are listed under
+[Profiling](reference/cuda.md#profiling). The exit status is the program's own when it failed, 0
+when a profile was captured, and 6 when the program ran but no profile was produced.
+`vfunc local run` takes the same options and needs no grant.
 
 The compiled program starts in the workload output directory. Declare a file that the Call must
 publish:
