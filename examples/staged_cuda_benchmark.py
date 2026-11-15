@@ -73,8 +73,6 @@ def _submit(
 ) -> RemoteResult:
     kwargs = {
         "source": SOURCE,
-        "profile": False,
-        "ncu_args": [],
         "nvcc_flags": [],
         "program_args": [str(hold_ms)],
     }
