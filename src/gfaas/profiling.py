@@ -561,16 +561,51 @@ def _profiler_version(ncu: str, env: Mapping[str, str]) -> str | None:
 
 
 def _gpus(env: Mapping[str, str]) -> list[dict[str, str]]:
+    """The GPUs this process can use, from ``nvidia-smi`` or else from the driver's procfs."""
     smi = shutil.which("nvidia-smi", path=env.get("PATH"))
     if smi is None:
-        return []
+        return _driver_gpus()
     query = "--query-gpu=name,uuid,driver_version"
     result = _run([smi, query, "--format=csv,noheader"], os.getcwd(), env, 20.0)
     if result["timed_out"] or result["returncode"] != 0:
-        return []
+        return _driver_gpus()
     gpus = []
     for line in result["stdout"].splitlines():
         fields = [value.strip() for value in line.split(",")]
         if len(fields) == 3:
             gpus.append(dict(zip(("name", "uuid", "driver_version"), fields, strict=True)))
+    return gpus
+
+
+def _driver_gpus(root: str | os.PathLike[str] = "/") -> list[dict[str, str]]:
+    """GPU identity without ``nvidia-smi``, which a workload image often lacks.
+
+    The driver lists every GPU of the host. Only those whose device node exists here are this
+    process's to use.
+    """
+    base = Path(root)
+    try:
+        version = (base / "proc/driver/nvidia/version").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    match = re.search(r"\s(\d+\.\d+(?:\.\d+)?)\s", version)
+    driver = match.group(1) if match else ""
+    gpus = []
+    for path in sorted(base.glob("proc/driver/nvidia/gpus/*/information")):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        fields = {
+            key.strip(): value.strip() for key, _, value in (line.partition(":") for line in lines)
+        }
+        minor = fields.get("Device Minor", "")
+        if minor.isdigit() and (base / f"dev/nvidia{minor}").exists():
+            gpus.append(
+                {
+                    "name": fields.get("Model", ""),
+                    "uuid": fields.get("GPU UUID", ""),
+                    "driver_version": driver,
+                }
+            )
     return gpus

@@ -322,6 +322,31 @@ def test_a_request_is_bounded_and_cannot_redirect_the_report() -> None:
         ProfilingRequest.from_dict({"output": "x"})
 
 
+def test_gpu_identity_comes_from_the_driver_when_the_image_has_no_nvidia_smi(
+    tmp_path: Path,
+) -> None:
+    # As a GB300 workload sees it: the driver lists the host's GPUs, one device node is present.
+    driver = tmp_path / "proc/driver/nvidia"
+    for minor, bus in enumerate(("0008:06:00.0", "0009:06:00.0")):
+        (driver / "gpus" / bus).mkdir(parents=True)
+        (driver / "gpus" / bus / "information").write_text(
+            f"Model: \t\t NVIDIA GB300\nIRQ:   \t\t 862\nGPU UUID: \t GPU-{minor}\n"
+            f"Bus Location: \t {bus}\nDevice Minor: \t {minor}\nGPU Excluded:\t No\n"
+        )
+    (driver / "version").write_text(
+        "NVRM version: NVIDIA UNIX Open Kernel Module for aarch64  610.57.04  Release Build  "
+        "(dvs-builder@U22-I3-G07-01-3)  Wed Jul 29 03:02:27 UTC 2026\n"
+        "GCC version:  gcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1)\n"
+    )
+    (tmp_path / "dev").mkdir()
+    (tmp_path / "dev/nvidia1").touch()
+
+    assert profiling._driver_gpus(tmp_path) == [
+        {"name": "NVIDIA GB300", "uuid": "GPU-1", "driver_version": "610.57.04"}
+    ]
+    assert profiling._driver_gpus(tmp_path / "missing") == []
+
+
 class ReportStore:
     """A client that serves one published profile directory."""
 
