@@ -21,9 +21,20 @@ from argcomplete.completers import FilesCompleter
 from gfaas import cuda_runner, local_cuda, python_runner
 from gfaas.artifacts import ArtifactOutput
 from gfaas.client import Client, RemoteResult
-from gfaas.cuda import staged_execution_plan
+from gfaas.cuda import locate_reports, staged_execution_plan
+from gfaas.errors import GfaasError
+from gfaas.profiling import (
+    DEFAULT_MAX_REPORT_BYTES,
+    GPU_COUNTERS,
+    METRIC_SETS,
+    ProfilingOutcome,
+    ProfilingRequest,
+    download_reports,
+    outcome_from_result,
+)
 
 from .compatibility import add_compatibility_options
+from .constants import RC_PROFILE
 from .errors import CliError
 from .events import show_event
 
@@ -89,6 +100,66 @@ def _add_json_option(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_profile_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profile", action="store_true", help="run under Nsight Compute")
+    parser.add_argument(
+        "--ncu-arg", action="append", default=[], help="additional Nsight Compute option"
+    )
+    parser.add_argument("--profile-set", choices=METRIC_SETS, help="metric set (default: full)")
+    parser.add_argument(
+        "--profile-timeout",
+        type=_positive_integer,
+        metavar="SECONDS",
+        help="time budget of the profiled run alone (default: 300)",
+    )
+    parser.add_argument(
+        "--profile-launch-count",
+        type=_positive_integer,
+        metavar="COUNT",
+        help="profile at most this many kernel launches",
+    )
+    parser.add_argument(
+        "--profile-max-report",
+        type=_size_bytes,
+        metavar="SIZE",
+        help="largest report to publish or download (default: 64MiB)",
+    )
+    parser.add_argument(
+        "--profile-baseline",
+        action="store_true",
+        help="also run the program without the profiler, to report the slowdown",
+    )
+    parser.add_argument(
+        "--profile-dir", metavar="DIRECTORY", help="save the profile reports in this directory"
+    )
+
+
+def _profiling_request(args: argparse.Namespace) -> ProfilingRequest | None:
+    budgets = {
+        "timeout_s": args.profile_timeout,
+        "launch_count": args.profile_launch_count,
+        "max_report_bytes": args.profile_max_report,
+    }
+    chosen = {name: value for name, value in budgets.items() if value is not None}
+    if not args.profile:
+        if chosen or args.ncu_arg or args.profile_set or args.profile_baseline or args.profile_dir:
+            raise CliError("profiler options require --profile")
+        return None
+    try:
+        if args.profile_set:
+            return ProfilingRequest(
+                metric_set=args.profile_set,
+                arguments=tuple(args.ncu_arg),
+                baseline=args.profile_baseline,
+                **chosen,
+            )
+        return ProfilingRequest.from_arguments(
+            args.ncu_arg, baseline=args.profile_baseline, **chosen
+        )
+    except GfaasError as error:
+        raise CliError(str(error)) from error
+
+
 def _add_local_toolchain_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--nvcc", help="path or command name for the CUDA compiler")
     parser.add_argument("--ncu", help="path or command name for Nsight Compute")
@@ -122,8 +193,7 @@ def add_commands(commands: Any) -> None:
     run.add_argument("--max-output", type=_size_bytes)
     run.add_argument("--env", action="append", default=[], type=_name_value, metavar="NAME=VALUE")
     run.add_argument("--nvcc-flag", action="append", default=[])
-    run.add_argument("--profile", action="store_true")
-    run.add_argument("--ncu-arg", action="append", default=[])
+    _add_profile_options(run)
     run.add_argument("--detach", action="store_true")
     _add_output_options(run)
     _add_json_option(run)
@@ -145,8 +215,7 @@ def add_commands(commands: Any) -> None:
     )
     local_run.add_argument("--timeout", type=_positive_integer, default=600, metavar="SECONDS")
     local_run.add_argument("--nvcc-flag", action="append", default=[])
-    local_run.add_argument("--profile", action="store_true")
-    local_run.add_argument("--ncu-arg", action="append", default=[])
+    _add_profile_options(local_run)
     _add_output_options(local_run)
     _add_json_option(local_run)
 
@@ -289,6 +358,7 @@ def _submit_run(
 ) -> tuple[RemoteResult, str]:
     path, runtime, callable_name = _target(args.target, args.runtime)
     options = _submission_options(args)
+    request = _profiling_request(args)
     if runtime == "cuda":
         image = args.image or "cuda-nvcc"
         remote = client.submit(
@@ -296,18 +366,18 @@ def _submit_run(
             function=cuda_runner.run,
             kwargs={
                 "source": path.read_text(encoding="utf-8"),
-                "profile": args.profile,
-                "ncu_args": args.ncu_arg,
+                "profiling": request.to_dict() if request else None,
                 "nvcc_flags": args.nvcc_flag,
                 "program_args": program_args,
             },
             app_name="cuda-nvcc",
-            stages=staged_execution_plan(),
+            stages=staged_execution_plan(profiled=request is not None),
+            profiling=GPU_COUNTERS if request else None,
             **options,
         )
         return remote, runtime
 
-    if args.profile or args.nvcc_flag or args.ncu_arg:
+    if request is not None or args.nvcc_flag:
         raise CliError("CUDA compiler and profiler options require a CUDA source file")
     image = args.image or os.environ.get("GFAAS_IMAGE") or "pytorch-cu130"
     if callable_name is not None:
@@ -347,7 +417,43 @@ def _write_json(value: Any) -> None:
     print(json.dumps(value, separators=(",", ":"), sort_keys=True))
 
 
-def _show_result(call_id: str, result: Any, *, runtime: str, json_output: bool) -> int:
+def _show_profiling(outcome: ProfilingOutcome, saved: Sequence[Path]) -> None:
+    """One status line for the profiler, apart from the program's own output."""
+    line = f"[vfunc] profiling={outcome.status}"
+    if outcome.ok:
+        line += f" kernels={outcome.kernels}"
+        if outcome.passes is not None:
+            line += f" passes={outcome.passes}"
+        if outcome.slowdown is not None:
+            line += f" slowdown={outcome.slowdown:.1f}x"
+    else:
+        line += f": {outcome.detail}"
+    print(line, file=sys.stderr)
+    for warning in outcome.warnings:
+        print(f"[vfunc] profiler warning: {warning}", file=sys.stderr)
+    for report in outcome.reports:
+        where = f" artifact={report.artifact_id}" if report.artifact_id else ""
+        print(
+            f"[vfunc] profile report {report.filename} format={report.format} "
+            f"bytes={report.size_bytes} sha256={report.sha256}{where}",
+            file=sys.stderr,
+        )
+    for path in saved:
+        print(f"[vfunc] profile report -> {path}", file=sys.stderr)
+
+
+def _show_result(
+    call_id: str,
+    result: Any,
+    *,
+    runtime: str,
+    json_output: bool,
+    saved_reports: Sequence[Path] = (),
+) -> int:
+    try:
+        outcome = outcome_from_result(result, call_id=None if call_id == "local" else call_id)
+    except GfaasError as error:
+        raise CliError(str(error)) from error
     if json_output:
         _write_json({"type": "result", "call_id": call_id, "value": _json_value(result)})
     elif isinstance(result, dict) and isinstance(result.get("returncode"), int):
@@ -364,12 +470,20 @@ def _show_result(call_id: str, result: Any, *, runtime: str, json_output: bool) 
             compile_ms = result.get("compile_ms")
             run_ms = result.get("run_ms")
             print(f"[vfunc] compile_ms={compile_ms} run_ms={run_ms}", file=sys.stderr)
+        if outcome is not None:
+            _show_profiling(outcome, saved_reports)
     elif result is not None:
         if isinstance(result, (dict, list, str, int, float, bool)):
             print(json.dumps(result, indent=2, sort_keys=True))
         else:
             print(repr(result))
 
+    if outcome is not None:
+        # The program's own status first; a run that only lost its profile has a code of its own.
+        status = outcome.program_returncode
+        if status is not None and status != 0:
+            return min(status, 125) if status > 0 else 1
+        return 0 if outcome.ok else RC_PROFILE
     if isinstance(result, dict):
         returncode = result.get("returncode")
         if isinstance(returncode, int) and not isinstance(returncode, bool) and returncode != 0:
@@ -443,7 +557,6 @@ def _local_command(args: argparse.Namespace, program_args: list[str]) -> int:
         host_compiler=args.ccbin,
         device=args.device,
         environment=environment,
-        require_profiler=getattr(args, "profile", False),
     )
     if args.local_command == "info":
         return _show_local_info(toolchain, json_output=args.json)
@@ -454,6 +567,7 @@ def _local_command(args: argparse.Namespace, program_args: list[str]) -> int:
     if path.suffix.lower() != ".cu":
         raise CliError("local CUDA source must use the .cu suffix")
     workdir = Path.cwd()
+    request = _profiling_request(args)
     _reserve_local_output_paths(args, workdir)
     nvcc_flags, architecture = local_cuda.architecture_flags(
         args.nvcc_flag,
@@ -469,8 +583,8 @@ def _local_command(args: argparse.Namespace, program_args: list[str]) -> int:
         environment=environment,
         workdir=workdir,
         timeout_seconds=args.timeout,
-        profile=args.profile,
-        ncu_args=args.ncu_arg,
+        profiling=request,
+        profile_directory=Path(args.profile_dir) if args.profile_dir else None,
     )
     result.update(
         {
@@ -533,7 +647,22 @@ def _run_command(client: Client, args: argparse.Namespace, program_args: list[st
                 file=sys.stderr,
             )
         return 130
-    return _show_result(remote.call_id, result, runtime=runtime, json_output=args.json)
+    saved: list[Path] = []
+    if isinstance(result, dict) and result.get("profiling") is not None:
+        result["profiling"] = locate_reports(remote, result["profiling"])
+        if args.profile_dir:
+            try:
+                saved = download_reports(
+                    client,
+                    ProfilingOutcome.from_dict(result["profiling"]),
+                    args.profile_dir,
+                    max_bytes=args.profile_max_report or DEFAULT_MAX_REPORT_BYTES,
+                )
+            except GfaasError as error:
+                raise CliError(str(error)) from error
+    return _show_result(
+        remote.call_id, result, runtime=runtime, json_output=args.json, saved_reports=saved
+    )
 
 
 def _call_command(client: Client, args: argparse.Namespace) -> int:

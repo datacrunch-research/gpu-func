@@ -29,6 +29,9 @@ def custom_args(source, **overrides):
         "ncu_args": "--set full",
         "no_nvtx_filter": False,
         "nvtx_range": "profile_kernel",
+        "profile_timeout": None,
+        "profile_launch_count": None,
+        "profile_max_report": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -56,8 +59,17 @@ class PayloadTests(unittest.TestCase):
             self.assertEqual(payload["custom"]["sources"], ["kernel.cu", "harness.cu"])
             self.assertEqual(payload["custom"]["report_name"], "bad_name_with_spaces")
             self.assertEqual(payload["custom"]["flags"][-1], "-arch=sm_100a")
-            self.assertEqual(payload["custom"]["ncu_args"], ["--set", "full"])
-            self.assertEqual(payload["custom"]["nvtx_range"], "profile_kernel")
+            self.assertEqual(
+                payload["custom"]["profiling"],
+                {
+                    "metric_set": None,
+                    "arguments": ["--set", "full", "--nvtx", "--nvtx-include", "profile_kernel/"],
+                    "timeout_s": 300,
+                    "launch_count": None,
+                    "max_report_bytes": 64 * 1024 * 1024,
+                    "baseline": False,
+                },
+            )
             self.assertEqual(payload["files"]["kernel.cu"], source.read_bytes())
             self.assertEqual(
                 payload["hashes"]["kernel.cu"], hashlib.sha256(source.read_bytes()).hexdigest()
@@ -68,9 +80,19 @@ class PayloadTests(unittest.TestCase):
             source = Path(tmp) / "kernel.cu"
             source.write_text("int main() { return 0; }\n", encoding="utf-8")
 
-            payload = _build_custom_payload(custom_args(source, no_nvtx_filter=True), "b200", "")
+            payload = _build_custom_payload(
+                custom_args(source, no_nvtx_filter=True, ncu_args="", profile_timeout=90),
+                "b200",
+                "",
+            )
 
-            self.assertEqual(payload["custom"]["nvtx_range"], "")
+            self.assertEqual(payload["custom"]["profiling"]["arguments"], [])
+            self.assertEqual(payload["custom"]["profiling"]["metric_set"], "basic")
+            self.assertEqual(payload["custom"]["profiling"]["timeout_s"], 90)
+            run_only = _build_custom_payload(custom_args(source, custom_command="run"), "b200", "")
+            self.assertIsNone(run_only["custom"]["profiling"])
+            with self.assertRaisesRegex(CliError, "sets --export itself"):
+                _build_custom_payload(custom_args(source, ncu_args="--export x"), "b200", "")
             self.assertEqual(payload["custom"]["flags"], ["-std=c++20", "-O3", "-lineinfo"])
 
     def test_build_custom_payload_rejects_output_path(self):

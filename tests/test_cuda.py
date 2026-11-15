@@ -71,6 +71,7 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
         "compile_ms": 12,
         "run_ms": 4,
         "ncu_csv": "metric,value\nsm__throughput.avg.pct_of_peak_sustained_elapsed,12.3\n",
+        "profiling": None,
     }
     client = FakeClient(fake_result)
     requirements = gfaas.Compatibility(cpu_architecture="amd64", gpu_compute_capabilities=("10.0",))
@@ -98,11 +99,18 @@ def test_compile_and_run_profiled_cuda_submits_expected_request():
         "function": cuda_runner.run,
         "kwargs": {
             "source": ADD_CU_SOURCE,
-            "profile": True,
-            "ncu_args": ["--set", "full", "--target-processes", "all"],
+            "profiling": {
+                "metric_set": None,
+                "arguments": ["--set", "full", "--target-processes", "all"],
+                "timeout_s": 300,
+                "launch_count": None,
+                "max_report_bytes": 64 * 1024 * 1024,
+                "baseline": False,
+            },
             "nvcc_flags": ["-lineinfo"],
             "program_args": ["--iters", "5"],
         },
+        "profiling": "gpu_counters",
         "gpu": "B200",
         "gpu_count": None,
         "gpu_type": "b200",
@@ -164,8 +172,9 @@ def test_cuda_source_profile_builder_sets_ncu_args():
     )
 
     assert result == fake_result
-    assert client.calls[0]["kwargs"]["profile"] is True
-    assert client.calls[0]["kwargs"]["ncu_args"] == ["--set", "full"]
+    assert client.calls[0]["profiling"] == "gpu_counters"
+    assert client.calls[0]["kwargs"]["profiling"]["arguments"] == ["--set", "full"]
+    assert client.calls[0]["kwargs"]["profiling"]["metric_set"] is None
 
 
 def test_cuda_runner_uses_ccbin_and_writable_ncu_config(monkeypatch, tmp_path: Path):
@@ -197,52 +206,61 @@ def test_cuda_runner_uses_ccbin_and_writable_ncu_config(monkeypatch, tmp_path: P
     monkeypatch.setattr(cuda_runner, "_host_cxx_flags", lambda: ["-ccbin", "/usr/bin/g++"])
 
     real_access = cuda_runner.os.access
-    real_exists = cuda_runner.os.path.exists
 
     def fake_access(path: str, mode: int) -> bool:
         if path == "/root":
             return False
         return real_access(path, mode)
 
-    def fake_exists(path: str) -> bool:
-        if path == str(tmp_path / "report.csv"):
-            return True
-        return real_exists(path)
-
     def fake_run(  # type: ignore[no-untyped-def]
         cmd, capture_output, text, check, env, cwd=None
     ):
         calls.append({"cmd": cmd, "env": env.copy(), "cwd": cwd})
-        if cmd[0].endswith("ncu"):
-            (tmp_path / "report.csv").write_text(
-                'Kernel Name,Metric Name,Metric Value\n"add_kernel","Duration","1"\n',
-                encoding="utf-8",
-            )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="nvcc 13.0\n", stderr="")
+
+    def fake_profiler(program, request, **options):  # type: ignore[no-untyped-def]
+        calls.append({"cmd": program, "request": request, **options})
+        return {
+            "process": {"returncode": 0, "stdout": "ran\n", "stderr": "", "ms": 7},
+            "outcome": {
+                "status": "profiled",
+                "program_returncode": 0,
+                "profiler_returncode": 0,
+            },
+            "csv": '"Kernel Name"\n"add_kernel"\n',
+        }
 
     monkeypatch.setattr(cuda_runner.os, "access", fake_access)
-    monkeypatch.setattr(cuda_runner.os.path, "exists", fake_exists)
     monkeypatch.setattr(cuda_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr("gfaas.profiling.run_profiler", fake_profiler)
 
     result = cuda_runner.run(
         source="int main() { return 0; }\n",
-        profile=True,
-        ncu_args=["--set", "full"],
+        profiling=gfaas.ProfilingRequest(metric_set="full").to_dict(),
     )
 
     compile_call = calls[0]
-    run_call = calls[1]
+    run_call = next(call for call in calls if "request" in call)
     assert compile_call["cmd"][:3] == [
         "/usr/local/cuda/bin/nvcc",
         "-ccbin",
         "/usr/bin/g++",
     ]
     assert mkdtemp_calls == [{"prefix": "gfaas-cuda-", "dir": str(io_root)}]
+    assert run_call["cmd"] == [str(tmp_path / "kernel")]
+    assert run_call["request"] == gfaas.ProfilingRequest(metric_set="full")
+    assert run_call["ncu"] == "/usr/local/cuda/bin/ncu"
     assert run_call["env"]["HOME"] == str(tmp_path)
     assert run_call["env"]["XDG_CONFIG_HOME"] == str(tmp_path / ".config")
     assert run_call["cwd"] == str(output_root)
+    # Reports are published under the Call's profile output.
+    assert run_call["publish_directory"] == str(output_root / "profiles")
+    assert run_call["output_name"] == "profiles"
     assert "add_kernel" in result["ncu_csv"]
     assert result["phase"] == "run"
+    assert (result["returncode"], result["run_ms"]) == (0, 7)
+    assert result["stdout"].endswith("ran\n")
+    assert result["profiling"]["status"] == "profiled"
 
 
 def test_cuda_runner_marks_compiler_failure(monkeypatch, tmp_path: Path):
@@ -274,6 +292,7 @@ def test_cuda_runner_marks_compiler_failure(monkeypatch, tmp_path: Path):
         "compile_ms": result["compile_ms"],
         "run_ms": 0,
         "ncu_csv": None,
+        "profiling": None,
     }
 
 

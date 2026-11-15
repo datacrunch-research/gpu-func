@@ -17,7 +17,12 @@ Returned dict (cloudpickle-encoded by fc-worker's wrapper)::
         "compile_ms": int,
         "run_ms":     int,
         "ncu_csv":    str | None,
+        "profiling":  dict | None,
     }
+
+``profiling`` is the plain form of :class:`gfaas.profiling.ProfilingOutcome` for a profiled run.
+For such a run ``returncode`` is the program's own status when the run establishes it, and the
+profiler's otherwise; ``profiling["status"]`` says what the profiler captured.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ from typing import Any
 
 _COMPILED_ARTIFACT_ENV = "GFAAS_COMPILED_ARTIFACT_ID"
 _COMPILED_OUTPUT_DIRECTORY = "compiled-cuda"
+_PROFILE_OUTPUT_DIRECTORY = "profiles"
 
 
 def _which(cmd: str) -> str:
@@ -52,6 +58,13 @@ def _which(cmd: str) -> str:
             return candidate
 
     raise RuntimeError(f"required binary not found in PATH: {cmd}")
+
+
+def _find(cmd: str) -> str | None:
+    try:
+        return _which(cmd)
+    except RuntimeError:
+        return None
 
 
 def _host_cxx_flags() -> list[str]:
@@ -111,8 +124,7 @@ def run(
     source: str,
     nvcc_flags: list[str] | None = None,
     program_args: list[str] | None = None,
-    profile: bool = False,
-    ncu_args: list[str] | None = None,
+    profiling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compatibility path for coordinators that do not support Call stages."""
     workdir, bin_path, compile_report, tool_env = _compile_program(source, nvcc_flags)
@@ -124,8 +136,7 @@ def run(
         tool_env,
         compile_report,
         program_args=program_args,
-        profile=profile,
-        ncu_args=ncu_args,
+        profiling=profiling,
     )
 
 
@@ -134,11 +145,10 @@ def compile_stage(
     source: str,
     nvcc_flags: list[str] | None = None,
     program_args: list[str] | None = None,
-    profile: bool = False,
-    ncu_args: list[str] | None = None,
+    profiling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile CUDA without a GPU lease and publish an executable tree."""
-    del program_args, profile, ncu_args
+    del program_args, profiling
     workdir, bin_path, report, tool_env = _compile_program(source, nvcc_flags)
     if report["stdout"]:
         print(report["stdout"], end="")
@@ -187,8 +197,7 @@ def execute_stage(
     source: str,
     nvcc_flags: list[str] | None = None,
     program_args: list[str] | None = None,
-    profile: bool = False,
-    ncu_args: list[str] | None = None,
+    profiling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run a compiled CUDA Artifact after the coordinator acquires a GPU."""
     artifact_id = os.environ.get(_COMPILED_ARTIFACT_ENV)
@@ -230,8 +239,7 @@ def execute_stage(
         _subprocess_env(workdir),
         compile_report,
         program_args=program_args,
-        profile=profile,
-        ncu_args=ncu_args,
+        profiling=profiling,
     )
 
 
@@ -267,6 +275,7 @@ def _compile_program(
         "compile_ms": compile_ms,
         "run_ms": 0,
         "ncu_csv": None,
+        "profiling": None,
     }
     return workdir, bin_path, report, tool_env
 
@@ -278,51 +287,67 @@ def _execute_program(
     compile_report: dict[str, Any],
     *,
     program_args: list[str] | None,
-    profile: bool,
-    ncu_args: list[str] | None,
+    profiling: dict[str, Any] | None,
 ) -> dict[str, Any]:
-
-    program_args = list(program_args or [])
-    ncu_csv: str | None = None
-    csv_path = os.path.join(workdir, "report.csv")
-
-    if profile:
-        ncu = _which("ncu")
-        run_cmd = [
-            ncu,
-            "--csv",
-            "--log-file",
-            csv_path,
-            *(ncu_args or ["--set", "full"]),
-            bin_path,
-            *program_args,
-        ]
+    program = [bin_path, *(program_args or [])]
+    cwd = _program_workdir(workdir)
+    if profiling is None:
+        t0 = time.monotonic()
+        run_proc = subprocess.run(
+            program,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=tool_env,
+            cwd=cwd,
+        )
+        process: dict[str, Any] = {
+            "returncode": run_proc.returncode,
+            "stdout": run_proc.stdout,
+            "stderr": run_proc.stderr,
+            "ms": int((time.monotonic() - t0) * 1000),
+        }
+        outcome = None
+        ncu_csv = None
     else:
-        run_cmd = [bin_path, *program_args]
+        from gfaas.profiling import ProfilingRequest, run_profiler
 
-    t0 = time.monotonic()
-    run_proc = subprocess.run(
-        run_cmd,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=tool_env,
-        cwd=_program_workdir(workdir),
-    )
-    run_ms = int((time.monotonic() - t0) * 1000)
+        output_root = os.environ.get("GFAAS_OUTPUT_ROOT")
+        profiled = run_profiler(
+            program,
+            ProfilingRequest.from_dict(profiling),
+            ncu=_find("ncu"),
+            cwd=cwd,
+            env=tool_env,
+            report_directory=workdir,
+            publish_directory=(
+                os.path.join(output_root, _PROFILE_OUTPUT_DIRECTORY) if output_root else None
+            ),
+            output_name=_PROFILE_OUTPUT_DIRECTORY if output_root else None,
+            provenance={
+                "compiler": _compiler_identity(_which("nvcc"), tool_env),
+                "image": {
+                    "name": os.environ.get("GFAAS_BUILD_IMAGE_NAME"),
+                    "digest": os.environ.get("GFAAS_BUILD_IMAGE_DIGEST"),
+                },
+            },
+        )
+        process, outcome, ncu_csv = profiled["process"], profiled["outcome"], profiled["csv"]
 
-    if profile and os.path.exists(csv_path):
-        with open(csv_path) as f:
-            ncu_csv = f.read()
-
+    # The program's own status where the run establishes it; otherwise the profiler's.
+    returncode = process["returncode"]
+    if outcome is not None:
+        known = (outcome["program_returncode"], outcome["profiler_returncode"], 1)
+        returncode = next(code for code in known if code is not None)
     return {
         "phase": "run",
-        "stdout": (compile_report.get("stdout") or "") + run_proc.stdout,
-        "stderr": (compile_report.get("stderr") or "") + run_proc.stderr,
-        "returncode": run_proc.returncode,
+        "stdout": (compile_report.get("stdout") or "") + process["stdout"],
+        "stderr": (compile_report.get("stderr") or "") + process["stderr"],
+        "returncode": returncode,
         "compile_ms": compile_report.get("compile_ms", 0),
-        "run_ms": run_ms,
+        "run_ms": process["ms"],
         "ncu_csv": ncu_csv,
+        "profiling": outcome,
     }
 
 

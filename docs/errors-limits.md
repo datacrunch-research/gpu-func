@@ -5,14 +5,16 @@ For the complete exception list and retained report fields, read the
 
 ## Error types
 
-| Exception                 | When it occurs                                              |
-| ------------------------- | ----------------------------------------------------------- |
-| `GfaasError`              | An API request fails, or a Call ends in a non-success state |
-| `ArtifactTreeUploadError` | A child upload or final tree creation fails                 |
-| `CudaCompilationError`    | A single-stage CUDA helper returns a compile error report   |
-| `CudaProcessError`        | The compiled program or profiler exits unsuccessfully       |
-| `SerializationError`      | The SDK cannot serialize the arguments or result            |
-| `TimeoutError`            | The local `wait()` reaches its deadline                     |
+| Exception                  | When it occurs                                              |
+| -------------------------- | ----------------------------------------------------------- |
+| `GfaasError`               | An API request fails, or a Call ends in a non-success state |
+| `ArtifactTreeUploadError`  | A child upload or final tree creation fails                 |
+| `CudaCompilationError`     | A single-stage CUDA helper returns a compile error report   |
+| `CudaProcessError`         | The compiled program exits unsuccessfully                   |
+| `ProfilingNotGrantedError` | The API key has no `profiling` grant                        |
+| `ProfilingError`           | `raise_for_status()` on a run that produced no profile      |
+| `SerializationError`       | The SDK cannot serialize the arguments or result            |
+| `TimeoutError`             | The local `wait()` reaches its deadline                     |
 
 CUDA exceptions keep the full report as `.report`. They also expose `.stdout`, `.stderr`,
 `.returncode`, `.compile_ms`, and `.run_ms`.
@@ -21,7 +23,8 @@ Remote staged CUDA compilation fails the Call before GPU assignment. `wait()` ra
 for this terminal state. Read the retained Call logs to get the complete compiler output.
 
 The compiled program returns a process report from the GPU stage. `compile_and_run()` converts an
-unsuccessful process report to `CudaProcessError`.
+unsuccessful process report to `CudaProcessError`. In a profiled run, the profiler capturing nothing
+is not an error: read the report's [profiling outcome](reference/cuda.md#profiling).
 
 `TimeoutError` only stops the local wait. It does not cancel the remote Call. Keep the
 `RemoteResult`, then read its status or request cancellation.

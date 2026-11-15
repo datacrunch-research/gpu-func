@@ -14,6 +14,12 @@ MARKDOWN_LINK = re.compile(r"\[[^]]*]\(([^)]+)\)")
 
 def test_documented_public_sdk_surface_is_available() -> None:
     expected = {
+        "ProfilingError",
+        "ProfilingNotGrantedError",
+        "ProfilingOutcome",
+        "ProfilingReport",
+        "ProfilingRequest",
+        "ProfilingUnsupportedError",
         "App",
         "CutlassKernel",
         "CutlassTuning",

@@ -182,6 +182,24 @@ def build_parser() -> argparse.ArgumentParser:
     custom.add_argument("--nvtx-range", default="profile_kernel")
     custom.add_argument("--no-nvtx-filter", action="store_true")
     custom.add_argument(
+        "--profile-timeout",
+        type=int,
+        metavar="SECONDS",
+        help="time budget of the profiled run alone (default: 300)",
+    )
+    custom.add_argument(
+        "--profile-launch-count",
+        type=int,
+        metavar="COUNT",
+        help="profile at most this many kernel launches",
+    )
+    custom.add_argument(
+        "--profile-max-report",
+        type=int,
+        metavar="BYTES",
+        help="largest report to publish (default: 67108864)",
+    )
+    custom.add_argument(
         "--report-name",
         help="base name for the profile .ncu-rep (default: source file stem)",
     )

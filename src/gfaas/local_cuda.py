@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import GfaasError
+from .profiling import ProfilingRequest, run_profiler
 
 _DISCOVERY_TIMEOUT_SECONDS = 10
 _NVCC_VERSION = re.compile(r"\bV(?P<version>[0-9]+(?:\.[0-9]+)+)\b")
@@ -355,9 +356,16 @@ def run(
     environment: Mapping[str, str],
     workdir: Path,
     timeout_seconds: int,
-    profile: bool = False,
-    ncu_args: Sequence[str] = (),
+    profiling: ProfilingRequest | None = None,
+    profile_directory: Path | None = None,
 ) -> dict[str, Any]:
+    """Compile and run one CUDA source on this machine.
+
+    With ``profiling`` the program runs under Nsight Compute and the result carries the same
+    ``profiling`` outcome a remote run returns. No service authorization is involved: whether the
+    profiler may read the GPU counters is this machine's driver setting. Reports are kept in
+    ``profile_directory`` when one is given.
+    """
     deadline = time.monotonic() + timeout_seconds
     with tempfile.TemporaryDirectory(prefix="gfaas-local-cuda-") as temporary_directory:
         temporary = Path(temporary_directory)
@@ -384,37 +392,43 @@ def run(
                 "compile_ms": compile_ms,
                 "run_ms": 0,
                 "ncu_csv": None,
+                "profiling": None,
             }
 
-        ncu_csv: str | None = None
-        if profile:
-            if toolchain.ncu is None:
-                raise LocalCudaError("ncu is required for local profiling")
-            report_path = temporary / "report.csv"
-            run_command = [
-                toolchain.ncu,
-                "--csv",
-                "--log-file",
-                str(report_path),
-                *(ncu_args or ("--set", "full")),
-                str(binary),
-                *program_args,
-            ]
-        else:
-            report_path = None
-            run_command = [str(binary), *program_args]
+        if profiling is not None:
+            profiled = run_profiler(
+                [str(binary), *program_args],
+                profiling,
+                ncu=toolchain.ncu,
+                cwd=workdir,
+                env=environment,
+                report_directory=temporary,
+                publish_directory=profile_directory,
+                remaining_s=_remaining_timeout(deadline, "execution"),
+                provenance={"compiler": toolchain.nvcc_version, "execution": "local"},
+            )
+            process, outcome = profiled["process"], profiled["outcome"]
+            known = (outcome["program_returncode"], outcome["profiler_returncode"], 1)
+            return {
+                "phase": "run",
+                "stdout": (compile_process.stdout or "") + process["stdout"],
+                "stderr": (compile_process.stderr or "") + process["stderr"],
+                "returncode": next(code for code in known if code is not None),
+                "compile_ms": compile_ms,
+                "run_ms": process["ms"],
+                "ncu_csv": profiled["csv"],
+                "profiling": outcome,
+            }
 
         run_started = time.monotonic()
         run_process = _run_process(
-            run_command,
+            [str(binary), *program_args],
             phase="execution",
             environment=environment,
             cwd=workdir,
             deadline=deadline,
         )
         run_ms = int((time.monotonic() - run_started) * 1000)
-        if report_path is not None and report_path.is_file():
-            ncu_csv = report_path.read_text(encoding="utf-8")
         return {
             "phase": "run",
             "stdout": (compile_process.stdout or "") + run_process.stdout,
@@ -422,5 +436,6 @@ def run(
             "returncode": run_process.returncode,
             "compile_ms": compile_ms,
             "run_ms": run_ms,
-            "ncu_csv": ncu_csv,
+            "ncu_csv": None,
+            "profiling": None,
         }

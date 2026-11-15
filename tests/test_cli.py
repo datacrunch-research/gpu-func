@@ -156,8 +156,7 @@ def test_run_submits_cuda_file_with_resources_and_program_arguments(
     assert submission["stages"][1].artifacts[0].output == "compiled-cuda"
     assert submission["kwargs"] == {
         "source": "int main() { return 0; }\n",
-        "profile": False,
-        "ncu_args": [],
+        "profiling": None,
         "nvcc_flags": ["-O3"],
         "program_args": ["--problem-size", "4096"],
     }
