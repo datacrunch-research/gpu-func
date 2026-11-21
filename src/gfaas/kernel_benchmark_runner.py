@@ -164,7 +164,7 @@ def measure_candidates(
         "l2_bytes": flush.numel() // 2,
         "explicit_eviction": ring.requires_flush,
         "cache_assumption": (
-            "Input ring cannot exceed L2 within configured limits; explicitly evict before each timed call."
+            "Input ring cannot exceed L2 within configured limits; one pass of independent sets is evicted before each pass."
             if ring.requires_flush
             else "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic."
         ),
