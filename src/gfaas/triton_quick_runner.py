@@ -514,8 +514,10 @@ class InputRing:
         self.append()
         count = l2_bytes // self.footprint_bytes + 1
         # Tiny inputs can require hundreds of thousands of allocations to exceed
-        # L2. Keep one set within the user's limits and evict before each timed
-        # call instead. A single set that exceeds the memory limit still fails.
+        # L2. Instead of an L2-overflowing ring, final timing then grows the ring
+        # to one pass of independent sets and evicts L2 once before each pass, so
+        # every timed call still reads storage untouched since the last eviction.
+        # A single set that exceeds the memory limit still fails.
         self.requires_flush = count > max_sets or count * self.allocated_bytes > max_bytes
         if not self.requires_flush:
             self.ensure(count)
@@ -621,11 +623,12 @@ def ring_trials(
         for index, candidate in enumerate(candidates):
             if iteration >= counts[index]:
                 continue
+            if getattr(ring, "requires_flush", False) and ring.cursor % len(ring.sets) == 0:
+                # Evict once per pass over independent sets; eviction and reset
+                # remain outside the measured kernel interval.
+                flush.zero_()
             args, kwargs = ring.next()
             ring.reset(*args, **kwargs)
-            if getattr(ring, "requires_flush", False):
-                # Eviction and reset remain outside the measured kernel interval.
-                flush.zero_()
             start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
             start.record()
             candidate(*args, **kwargs)
@@ -654,14 +657,19 @@ def final_benchmark(
             math.floor(settings.get("graph_duration_ms", 1.0) * 1000 / estimate_us),
         ),
     )
-    padded_sets = math.ceil(len(ring.sets) / z) * z if ring is not None else z
-    graph_fits = (
-        not getattr(ring, "requires_flush", False)
-        and padded_sets <= getattr(ring, "max_sets", math.inf)
-        and padded_sets
-        * (getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0)
-        <= getattr(ring, "max_bytes", math.inf)
+    per_pass_eviction = bool(getattr(ring, "requires_flush", False))
+    set_bytes = (
+        getattr(ring, "allocated_bytes", 0) / max(1, len(ring.sets)) if ring is not None else 0
     )
+    if per_pass_eviction:
+        # One graph covers one pass: z independent sets, evicted before each replay.
+        padded_sets = z
+    else:
+        padded_sets = math.ceil(len(ring.sets) / z) * z if ring is not None else z
+    graph_fits = padded_sets <= getattr(
+        ring, "max_sets", math.inf
+    ) and padded_sets * set_bytes <= getattr(ring, "max_bytes", math.inf)
+    eviction = "flush_per_ring_pass" if per_pass_eviction else "ring_overflow"
     if (
         z < settings.get("min_calls_per_graph", 10)
         or not graph_fits
@@ -670,13 +678,28 @@ def final_benchmark(
         count = min(
             maximum, max(settings.get("min_final_trials", 25), math.ceil(final_us / estimate_us))
         )
+        if per_pass_eviction and hasattr(ring, "ensure"):
+            # One eviction per pass over up to max_calls_per_graph independent sets.
+            by_bytes = int(getattr(ring, "max_bytes", math.inf) // max(1, set_bytes))
+            ring.ensure(
+                max(
+                    1,
+                    min(
+                        settings.get("max_calls_per_graph", 100),
+                        getattr(ring, "max_sets", math.inf),
+                        by_bytes,
+                        count,
+                    ),
+                )
+            )
+            ring.cursor = 0
         trials = ring_trials([candidate], [count], ring, torch, flush, flush_iterations)[0]
         return {
             "runtime_us": min(trials),
             "trial_us": trials,
-            "method": "events-ring-flush"
-            if getattr(ring, "requires_flush", False)
-            else "events-ring",
+            "method": "events-ring",
+            "l2_eviction": eviction,
+            "ring_sets": len(ring.sets) if ring is not None else 0,
             "calls_per_graph": 0,
             "iterations": count,
         }
@@ -718,6 +741,9 @@ def final_benchmark(
         graph, sets = graphs[index % len(graphs)]
         for args, kwargs in sets:
             ring.reset(*args, **kwargs)
+        if per_pass_eviction:
+            # Each replay is one pass over independent sets; evict outside the timed interval.
+            flush.zero_()
         start, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(enable_timing=True)
         start.record()
         graph.replay()
@@ -729,6 +755,7 @@ def final_benchmark(
         "runtime_us": min(trials),
         "trial_us": trials,
         "method": "cudagraphs-ring",
+        "l2_eviction": eviction,
         "calls_per_graph": z,
         "graph_count": len(graphs),
         "iterations": count,
@@ -947,7 +974,7 @@ def benchmark_cycle(
             "ring_allocated_bytes": ring.allocated_bytes,
             "l2_bytes": flush.numel() // 2,
             "cache_assumption": (
-                "Input ring cannot exceed L2 within configured limits; explicitly evict before each timed call."
+                "Input ring cannot exceed L2 within configured limits; one pass of independent sets is evicted before each pass."
                 if ring.requires_flush
                 else "Generated storage footprint exceeds L2; eviction depends on actual kernel accesses and reset traffic."
             ),
