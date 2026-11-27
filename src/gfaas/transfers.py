@@ -34,26 +34,32 @@ RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504, 520, 522, 523, 524}
 TRANSIENT_ERRORS = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 
 
+# The longest wait between two attempts.
+MAXIMUM_DELAY_S = 8.0
+
+
 def pause(attempt: int, cancel: Event | None = None) -> None:
-    delay = 0.25 * 2**attempt
+    delay = min(0.25 * 2**attempt, MAXIMUM_DELAY_S)
     if cancel is None:
         time.sleep(delay)
     elif cancel.wait(delay):
         raise GfaasError("Artifact transfer cancelled")
 
 
-def retry_request(action: Callable[[], httpx.Response], cancel: Event | None) -> httpx.Response:
+def retry_request(
+    action: Callable[[], httpx.Response], cancel: Event | None, *, attempts: int = ATTEMPTS
+) -> httpx.Response:
     """Retry only idempotent operations; creation and completion have separate reconciliation."""
-    for attempt in range(ATTEMPTS):
+    for attempt in range(attempts):
         if cancel is not None and cancel.is_set():
             raise GfaasError("Artifact transfer cancelled")
         try:
             return action()
         except GfaasError as error:
-            if error.status_code not in RETRYABLE_STATUS or attempt == ATTEMPTS - 1:
+            if error.status_code not in RETRYABLE_STATUS or attempt == attempts - 1:
                 raise
         except TRANSIENT_ERRORS:
-            if attempt == ATTEMPTS - 1:
+            if attempt == attempts - 1:
                 raise
         pause(attempt, cancel)
     raise AssertionError("unreachable")
