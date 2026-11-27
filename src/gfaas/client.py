@@ -51,6 +51,8 @@ from .stages import CallStage
 from .transfers import RETRYABLE_STATUS, TRANSIENT_ERRORS, TransferManager, retry_request
 from .uploads import check_cancelled, run_uploads
 
+# Attempts for an API read: with the transfer backoff, about a minute of retrying.
+READ_ATTEMPTS = 12
 MAXIMUM_INLINE_ARTIFACT_BYTES = 1024 * 1024
 MAXIMUM_UPLOAD_PART_BYTES = 64 * 1024 * 1024
 
@@ -158,6 +160,25 @@ class Client:
         operation: str,
         **kwargs: Any,
     ) -> httpx.Response:
+        """Send one API request. A read is sent again after a transient failure, for about a
+        minute, so that waiting on a Call rides out a coordinator restart or a proxy's brief error
+        page. A write is sent once: sending it again could repeat its effect."""
+        if method != "GET":
+            return self._send(method, path, operation=operation, **kwargs)
+        return retry_request(
+            lambda: self._send(method, path, operation=operation, **kwargs),
+            None,
+            attempts=READ_ATTEMPTS,
+        )
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        *,
+        operation: str,
+        **kwargs: Any,
+    ) -> httpx.Response:
         response = self._http.request(method, path, **kwargs)
         if response.is_success:
             return response
@@ -209,7 +230,7 @@ class Client:
             check_cancelled(cancel)
 
             def action() -> httpx.Response:
-                return self._request(method, path, **kwargs)
+                return self._send(method, path, **kwargs)
 
             return retry_request(action, cancel) if method in {"GET", "PUT"} else action()
 
