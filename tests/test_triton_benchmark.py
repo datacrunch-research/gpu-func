@@ -494,7 +494,7 @@ def test_graph_padding_falls_back_to_events_when_ring_memory_is_bounded(monkeypa
     assert result["calls_per_graph"] == 0
 
 
-def test_bounded_ring_evicts_outside_event_timing_and_disables_graphs(monkeypatch):
+def test_bounded_ring_evicts_once_per_pass_outside_event_timing():
     log = []
 
     class Event:
@@ -505,32 +505,140 @@ def test_bounded_ring_evicts_outside_event_timing_and_disables_graphs(monkeypatc
             log.append("event")
 
         def elapsed_time(self, other):
-            return 0.005
+            return 0.5
+
+    class Ring:
+        requires_flush = True
+        max_sets = 256
+        max_bytes = 1024
+        allocated_bytes = 8
+
+        def __init__(self):
+            self.sets = [((0,), {})]
+            self.cursor = 0
+
+        def ensure(self, n):
+            while len(self.sets) < n:
+                self.sets.append(((len(self.sets),), {}))
+                self.allocated_bytes += 8
+
+        def next(self):
+            result = self.sets[self.cursor % len(self.sets)]
+            self.cursor += 1
+            return result
+
+        def reset(self, *a, **k):
+            log.append("reset")
 
     torch = SimpleNamespace(
         cuda=SimpleNamespace(Event=Event, synchronize=lambda: log.append("sync"))
     )
-    ring = SimpleNamespace(
-        requires_flush=True,
-        sets=[((), {})],
-        max_sets=1,
-        allocated_bytes=8,
-        max_bytes=8,
-        next=lambda: ((), {}),
-        reset=lambda *a, **k: log.append("reset"),
-    )
+    ring = Ring()
     flush = SimpleNamespace(zero_=lambda: log.append("flush"))
+    # A 5 us kernel cannot fill a graph under these settings, so events timing is used.
     timing = final_benchmark(
-        lambda: log.append("kernel"),
+        lambda *a: log.append("kernel"),
         5,
         ring,
         torch,
         flush,
-        {"l2_flush_iterations": 2, "max_final_trials": 3, "min_final_trials": 1},
+        {
+            "l2_flush_iterations": 2,
+            "max_final_trials": 6,
+            "min_final_trials": 6,
+            "max_calls_per_graph": 3,
+            "min_calls_per_graph": 10,
+        },
     )
-    assert timing["method"] == "events-ring-flush"
-    assert timing["calls_per_graph"] == 0
-    assert log == ["flush"] * 2 + ["reset", "flush", "event", "kernel", "event"] * 3 + ["sync"]
+    assert timing["method"] == "events-ring"
+    assert timing["l2_eviction"] == "flush_per_ring_pass"
+    assert timing["calls_per_graph"] == 0 and timing["ring_sets"] == 3
+    call = ["reset", "event", "kernel", "event"]
+    assert log == ["flush"] * 2 + (["flush"] + call * 3) * 2 + ["sync"]
+
+
+def test_bounded_ring_uses_graphs_and_evicts_before_each_replay():
+    log = []
+
+    class Context:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+    class Stream:
+        def wait_stream(self, other):
+            pass
+
+        def synchronize(self):
+            pass
+
+    class Event:
+        def __init__(self, **kw):
+            pass
+
+        def record(self):
+            log.append("event")
+
+        def elapsed_time(self, other):
+            return 0.2
+
+    class Graph:
+        def replay(self):
+            log.append("replay")
+
+    class Ring:
+        requires_flush = True
+        max_sets = 256
+        max_bytes = 1 << 20
+        allocated_bytes = 8
+
+        def __init__(self):
+            self.sets = [((0,), {})]
+
+        def ensure(self, n):
+            while len(self.sets) < n:
+                self.sets.append(((len(self.sets),), {}))
+                self.allocated_bytes += 8
+
+        def reset(self, *a):
+            pass
+
+    ring = Ring()
+    torch = SimpleNamespace(
+        cuda=SimpleNamespace(
+            synchronize=lambda: None,
+            Stream=Stream,
+            current_stream=Stream,
+            stream=lambda s: Context(),
+            graph_pool_handle=lambda: 1,
+            CUDAGraph=Graph,
+            graph=lambda *a, **k: Context(),
+            Event=Event,
+        )
+    )
+    flush = SimpleNamespace(zero_=lambda: log.append("flush"))
+    result = final_benchmark(
+        lambda *a: None,
+        5,
+        ring,
+        torch,
+        flush,
+        {"l2_flush_iterations": 1, "max_final_trials": 3, "min_final_trials": 3},
+    )
+    assert result["method"] == "cudagraphs-ring"
+    assert result["l2_eviction"] == "flush_per_ring_pass"
+    assert result["calls_per_graph"] == len(ring.sets) == 100 and result["graph_count"] == 1
+    timed = log[log.index("flush") + 1 :]
+    assert timed == ["flush", "event", "replay", "event"] * 3
+
+
+def test_overflow_ring_timing_reports_ring_overflow_eviction(monkeypatch):
+    ring = SimpleNamespace(sets=[None], max_sets=1, allocated_bytes=1024, max_bytes=1024)
+    monkeypatch.setattr("gfaas.triton_quick_runner.ring_trials", lambda *a: [[5.0, 6.0]])
+    result = final_benchmark(None, 5, ring, None, None)
+    assert result["method"] == "events-ring" and result["l2_eviction"] == "ring_overflow"
 
 
 def test_l2_eviction_buffer_uses_current_replica_device(monkeypatch):
